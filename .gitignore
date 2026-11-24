@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Production build outputs
+dist/
+**/dist/
+build/
+**/build/
+
+# Environment files and secrets
+.env*
+**/.env*
+!.env.example
+!**/.env.example
+
+# Data and logs
+*.log
+**/*.log
+.veyra-data/
+coverage/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

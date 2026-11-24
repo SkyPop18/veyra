@@ -1,0 +1,6 @@
+{
+  "name": "Veyra",
+  "description": "View-only global currency & cryptocurrency strength leaderboard, head-to-head comparison, personalized market news, and Pro AI market intelligence platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
