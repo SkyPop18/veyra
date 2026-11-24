@@ -12,7 +12,7 @@ import {
 } from 'discord.js';
 import { createVeyraEmbed, formatSignedPct } from './utils/embeds.js';
 
-const VEYRA_API_BASE = (process.env.VEYRA_API_URL || 'http://localhost:3000').replace(/\/$/, '');
+const VEYRA_API_BASE = (process.env.VEYRA_API_URL || 'https://veyra-global.vercel.app').replace(/\/$/, '');
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 

@@ -53,7 +53,15 @@ function getServerValidatedAdminBasePath(): string | null {
   if (typeof document === 'undefined') return null;
   const meta = document.querySelector('meta[name="veyra-admin-mount"]');
   const val = meta?.getAttribute('content')?.trim() || '';
-  return val.length >= 24 && val.startsWith('/') ? val : null;
+  if (val.length >= 24 && val.startsWith('/')) return val;
+  // If running in SPA mode on Vercel CDN, match direct navigation to unguessable path
+  if (typeof window !== 'undefined') {
+    const parts = window.location.pathname.split('/').filter(Boolean);
+    if (parts.length > 0 && parts[0].startsWith('vx-') && parts[0].length >= 24) {
+      return `/${parts[0]}`;
+    }
+  }
+  return null;
 }
 
 function NotFoundPage() {
