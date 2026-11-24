@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Check, Crown, Lock, PlusCircle, Send, Sparkles } from 'lucide-react';
+import { ArrowRight, BarChart2, Crown, PlusCircle, Send, Sparkles } from 'lucide-react';
 import { useVeyra } from '../../context/VeyraContext';
 import { isProSubscriptionActive } from '../../lib/core';
 import { apiRequest, getActiveAccessToken } from '../../lib/api';
@@ -8,10 +8,10 @@ import { MarkdownView } from '../../components/MarkdownView';
 import type { AiAnalysisEntry } from '../../types/veyra';
 
 const SUGGESTED_PROMPTS = [
+  'What is the live USD/INR rate and India currency momentum?',
+  'Show me a chart comparing USD vs EUR vs GBP vs INR rates.',
   'What is the current BTC outlook given today’s Fear & Greed Index?',
-  'Compare USD vs EUR vs CHF strength momentum this week.',
-  'Which large-cap crypto assets show the strongest relative momentum today?',
-  'Summarize key macro risks for INR and JPY against G10 currencies.',
+  'Compare USD vs EUR vs CHF relative strength this week.',
 ];
 
 interface ChatTurn {
@@ -19,6 +19,15 @@ interface ChatTurn {
   role: 'user' | 'assistant';
   text: string;
   error?: boolean;
+}
+
+interface AiUsageStats {
+  isPro: boolean;
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  resetAt: string;
+  allowed: boolean;
 }
 
 const STORAGE_KEY = 'veyra_active_ai_chat';
@@ -44,6 +53,29 @@ export function AiAnalysisPage() {
   const [messages, setMessages] = useState<ChatTurn[]>(loadPersistedChat);
   const [history, setHistory] = useState<AiAnalysisEntry[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [usage, setUsage] = useState<AiUsageStats | null>(null);
+
+  // Load usage statistics
+  const refreshUsage = async () => {
+    try {
+      const res = await apiRequest<AiUsageStats>('/api/ai/usage');
+      setUsage(res);
+    } catch {
+      // Fallback usage state
+      setUsage({
+        isPro,
+        limit: isPro ? null : 5,
+        used: 0,
+        remaining: isPro ? null : 5,
+        resetAt: new Date(Date.now() + 48 * 3600 * 1000).toISOString(),
+        allowed: true,
+      });
+    }
+  };
+
+  useEffect(() => {
+    void refreshUsage();
+  }, [isPro]);
 
   // Keep active chat persistent across window/tab changes and browser restarts
   useEffect(() => {
@@ -69,15 +101,21 @@ export function AiAnalysisPage() {
   };
 
   useEffect(() => {
-    if (!isPro) return;
     void apiRequest<{ items: AiAnalysisEntry[] }>('/api/ai/history')
       .then((res) => setHistory(res.items))
       .catch(() => {});
   }, [isPro]);
 
+  const isLimitReached = !isPro && usage !== null && usage.remaining !== null && usage.remaining <= 0;
+
   const sendQuestion = async (questionText: string) => {
     const trimmed = questionText.trim();
     if (!trimmed || streaming) return;
+
+    if (isLimitReached) {
+      notify('Free message limit reached (5 messages / 2 days). Upgrade to Pro for unlimited analyses.', 'error');
+      return;
+    }
 
     const userMsg: ChatTurn = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
     const assistantId = `a-${Date.now() + 1}`;
@@ -101,7 +139,7 @@ export function AiAnalysisPage() {
       });
 
       if (!res.ok) {
-        const errJson = (await res.json().catch(() => ({}))) as { error?: string };
+        const errJson = (await res.json().catch(() => ({}))) as { error?: string; upgradeRequired?: boolean };
         throw new Error(errJson.error || `AI analysis request failed (${res.status})`);
       }
 
@@ -133,6 +171,7 @@ export function AiAnalysisPage() {
             );
           } else if (payload.done && payload.entry) {
             setHistory((prev) => [payload.entry!, ...prev]);
+            void refreshUsage();
           } else if (payload.error) {
             throw new Error(payload.error || 'AI stream interrupted.');
           }
@@ -144,72 +183,27 @@ export function AiAnalysisPage() {
         prev.map((m) => (m.id === assistantId ? { ...m, text: msg, error: true } : m))
       );
       notify(msg, 'error');
+      void refreshUsage();
     } finally {
       setStreaming(false);
     }
   };
 
-  if (!isPro) {
-    return (
-      <div className="max-w-2xl mx-auto py-8">
-        <div className="glass-surface p-8 sm:p-10 space-y-6 border-[#3b82f6]/35">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-[#3b82f6]/12 text-[#3b82f6]">
-            <Lock className="h-6 w-6" />
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-xs font-semibold text-[#2563eb] dark:text-[#60a5fa]">Veyra Pro Exclusive</p>
-            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#09090b] dark:text-white">
-              Unlock Data-Grounded AI Market Intelligence
-            </h1>
-            <p className="text-sm text-[#52525b] dark:text-[#a1a1aa] leading-relaxed">
-              Ask natural-language questions about global fiat strength, crypto momentum, and macro sentiment. Every response is injected server-side with live Veyra rates and Fear &amp; Greed telemetry.
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-[#f4f4f5]/80 dark:bg-white/[0.04] p-5 space-y-3">
-            <div className="flex items-baseline justify-between">
-              <span className="font-display text-lg font-bold">Veyra Pro Pass</span>
-              <span className="font-mono-num text-2xl font-bold text-[#2563eb] dark:text-[#60a5fa]">
-                ₹200 <span className="text-xs font-normal text-[#71717a]">/ 30 days</span>
-              </span>
-            </div>
-            <ul className="space-y-2 text-sm text-[#3f3f46] dark:text-[#d4d4d8]">
-              <li className="flex items-center gap-2"><Check className="h-4 w-4 text-[#3b82f6]" /><span>Real-time streamed AI analyst chat</span></li>
-              <li className="flex items-center gap-2"><Check className="h-4 w-4 text-[#3b82f6]" /><span>Live market cache context (BTC, FX basket, sentiment)</span></li>
-              <li className="flex items-center gap-2"><Check className="h-4 w-4 text-[#3b82f6]" /><span>90-day saved research history &amp; Discord /analyze access</span></li>
-            </ul>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              to="/dashboard/settings/subscription"
-              className="inline-flex items-center gap-2 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-5 py-2.5 text-sm font-semibold transition-colors"
-            >
-              <Crown className="h-4 w-4" />
-              <span>Upgrade to Veyra Pro (₹200/month)</span>
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="grid lg:grid-cols-12 gap-6">
-      <div className="lg:col-span-8 flex flex-col glass-surface overflow-hidden min-h-[600px]">
-        <div className="px-6 py-4 border-b border-[#e4e4e7] dark:border-white/10 flex items-center justify-between">
+      <div className="lg:col-span-8 flex flex-col glass-surface overflow-hidden min-h-[640px]">
+        {/* Header with Usage Status */}
+        <div className="px-6 py-4 border-b border-[#e4e4e7] dark:border-white/10 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="font-display text-lg font-bold text-[#09090b] dark:text-white flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-[#3b82f6]" />
-              <span>Veyra Pro AI Market Analyst</span>
+              <span>Veyra AI Market Analyst</span>
             </h1>
             <p className="text-xs text-[#71717a] dark:text-[#a1a1aa]">
-              Grounded in live cached FX rates, top crypto markets &amp; Fear/Greed Index
+              Grounded in live rates across 160+ fiat currencies (INR, EUR, USD, etc.), crypto &amp; sentiment
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             {messages.length > 0 && (
               <button
                 type="button"
@@ -220,17 +214,37 @@ export function AiAnalysisPage() {
                 <span>New Chat</span>
               </button>
             )}
-            <span className="text-xs font-semibold text-[#2563eb] dark:text-[#60a5fa]">Pro Active</span>
+
+            {isPro ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 border border-amber-500/30 px-3 py-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                <Crown className="h-3.5 w-3.5" />
+                <span>Pro Unlimited</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#3b82f6]/12 border border-[#3b82f6]/25 px-3 py-1 text-xs font-medium text-[#2563eb] dark:text-[#60a5fa]">
+                <BarChart2 className="h-3.5 w-3.5" />
+                <span>
+                  {usage ? `${usage.remaining ?? 5} of 5 free left (resets every 2d)` : '5 msgs / 2d (Free)'}
+                </span>
+              </span>
+            )}
           </div>
         </div>
 
+        {/* Message Viewport */}
         <div className="flex-1 p-6 space-y-5 overflow-y-auto">
           {messages.length === 0 ? (
             <div className="space-y-4 py-6">
-              <p className="text-sm text-[#52525b] dark:text-[#a1a1aa]">
-                Ask a macro, FX strength, or cryptocurrency research question — or start with a briefing prompt:
-              </p>
-              <div className="grid sm:grid-cols-2 gap-3">
+              <div className="max-w-lg space-y-1">
+                <h2 className="font-display text-base font-bold text-[#09090b] dark:text-white">
+                  Real-Time Currency &amp; Market Intelligence
+                </h2>
+                <p className="text-xs text-[#52525b] dark:text-[#a1a1aa] leading-relaxed">
+                  Ask questions about Indian Rupee (INR), USD, EUR, GBP, or any global currency. Veyra AI calculates exact cross-rates, generates visual graphs, and provides geopolitical analysis.
+                </p>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3 pt-2">
                 {SUGGESTED_PROMPTS.map((q) => (
                   <button
                     key={q}
@@ -250,7 +264,7 @@ export function AiAnalysisPage() {
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                  className={`max-w-[88%] sm:max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                     msg.role === 'user'
                       ? 'bg-[#3b82f6] text-white whitespace-pre-wrap'
                       : msg.error
@@ -263,8 +277,9 @@ export function AiAnalysisPage() {
                   ) : msg.text ? (
                     <MarkdownView content={msg.text} />
                   ) : (
-                    <span className="italic text-[#71717a] dark:text-[#a1a1aa]">
-                      Synthesizing live market data...
+                    <span className="italic text-[#71717a] dark:text-[#a1a1aa] flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-[#3b82f6] animate-pulse" />
+                      <span>Synthesizing live currency data &amp; telemetry...</span>
                     </span>
                   )}
                 </div>
@@ -273,6 +288,28 @@ export function AiAnalysisPage() {
           )}
         </div>
 
+        {/* Free Limit Warning Banner when 0 remaining */}
+        {isLimitReached && (
+          <div className="mx-4 mb-2 p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 flex items-center justify-between gap-3 text-xs">
+            <div className="space-y-0.5">
+              <p className="font-semibold text-amber-600 dark:text-amber-400">
+                You’ve used all 5 free analyses for this 2-day period.
+              </p>
+              <p className="text-[#52525b] dark:text-[#a1a1aa]">
+                Limit resets on {usage?.resetAt ? new Date(usage.resetAt).toLocaleString() : 'in 48 hours'}.
+              </p>
+            </div>
+            <Link
+              to="/dashboard/settings/subscription"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3 py-1.5 font-semibold shrink-0 transition-colors"
+            >
+              <Crown className="h-3.5 w-3.5" />
+              <span>Unlock Unlimited (₹200/mo)</span>
+            </Link>
+          </div>
+        )}
+
+        {/* Question Prompt Form */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -284,14 +321,18 @@ export function AiAnalysisPage() {
             type="text"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Ask about EUR/USD strength, BTC sentiment, or global macro trends..."
+            placeholder={
+              isLimitReached
+                ? 'Free limit reached (resets every 2 days). Upgrade for unlimited.'
+                : 'Ask about INR, USD, EUR rates, momentum, or ask for a chart...'
+            }
             aria-label="Ask Veyra AI Analyst"
-            disabled={streaming}
-            className="flex-1 rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-4 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
+            disabled={streaming || isLimitReached}
+            className="flex-1 rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-4 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6] disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={streaming || prompt.trim().length < 3}
+            disabled={streaming || prompt.trim().length < 3 || isLimitReached}
             className="inline-flex items-center gap-2 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2.5 text-sm font-semibold cursor-pointer disabled:opacity-50"
           >
             <Send className="h-4 w-4" />
@@ -300,32 +341,54 @@ export function AiAnalysisPage() {
         </form>
       </div>
 
-      <aside className="lg:col-span-4 glass-surface p-5 space-y-4">
-        <h2 className="font-display text-sm font-semibold text-[#09090b] dark:text-white">
-          Recent Research History
-        </h2>
-        {history.length === 0 ? (
-          <p className="text-xs text-[#71717a]">Your saved Pro analyses appear here for 90 days.</p>
-        ) : (
-          <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
-            {history.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() =>
-                  setMessages([
-                    { id: `h-u-${item.id}`, role: 'user', text: item.query },
-                    { id: `h-a-${item.id}`, role: 'assistant', text: item.response },
-                  ])
-                }
-                className="w-full text-left rounded-xl border border-[#e4e4e7] dark:border-white/10 p-3 hover:border-[#3b82f6]/40 transition-colors cursor-pointer space-y-1"
-              >
-                <p className="text-xs font-semibold text-[#09090b] dark:text-white line-clamp-2">{item.query}</p>
-                <p className="text-[11px] text-[#71717a]">{new Date(item.created_at).toLocaleString()}</p>
-              </button>
-            ))}
+      {/* Sidebar: Pro Upgrade & Research History */}
+      <aside className="lg:col-span-4 space-y-4">
+        {!isPro && (
+          <div className="glass-surface p-5 space-y-3 border-[#3b82f6]/30 bg-[#3b82f6]/5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[#2563eb] dark:text-[#60a5fa]">
+              <Crown className="h-4 w-4" />
+              <span>Upgrade to Veyra Pro</span>
+            </div>
+            <p className="text-xs text-[#52525b] dark:text-[#a1a1aa] leading-relaxed">
+              Unlock unlimited AI analyst conversations, automatic cross-rate matrix, and 90-day research history for ₹200/month.
+            </p>
+            <Link
+              to="/dashboard/settings/subscription"
+              className="inline-flex items-center justify-center gap-1.5 w-full rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3 py-2 text-xs font-semibold transition-colors"
+            >
+              <span>Get Pro Access</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
           </div>
         )}
+
+        <div className="glass-surface p-5 space-y-4">
+          <h2 className="font-display text-sm font-semibold text-[#09090b] dark:text-white">
+            Recent Research History
+          </h2>
+          {history.length === 0 ? (
+            <p className="text-xs text-[#71717a]">Your saved market analyses will appear here.</p>
+          ) : (
+            <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
+              {history.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() =>
+                    setMessages([
+                      { id: `h-u-${item.id}`, role: 'user', text: item.query },
+                      { id: `h-a-${item.id}`, role: 'assistant', text: item.response },
+                    ])
+                  }
+                  className="w-full text-left rounded-xl border border-[#e4e4e7] dark:border-white/10 p-3 hover:border-[#3b82f6]/40 transition-colors cursor-pointer space-y-1"
+                >
+                  <p className="text-xs font-semibold text-[#09090b] dark:text-white line-clamp-2">{item.query}</p>
+                  <p className="text-[11px] text-[#71717a]">{new Date(item.created_at).toLocaleString()}</p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </aside>
     </div>
   );

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
   Check,
@@ -14,8 +14,15 @@ import { DeltaText, PriceTicker, Sparkline, StrengthBar, ThemeToggle } from '../
 import { formatPrice } from '../lib/core';
 
 export function LandingPage() {
-  const { user, strength, fiat, crypto, news, fearGreed } = useVeyra();
+  const navigate = useNavigate();
+  const { user, authLoading, strength, fiat, crypto, news, fearGreed } = useVeyra();
   const [previewTab, setPreviewTab] = useState<'fiat' | 'crypto'>('fiat');
+
+  useEffect(() => {
+    if (user && !authLoading) {
+      navigate('/dashboard/home', { replace: true });
+    }
+  }, [user, authLoading, navigate]);
 
   const topFiat = strength.fiat.slice(0, 6);
   const topCrypto = strength.crypto.slice(0, 6);

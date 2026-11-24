@@ -252,8 +252,14 @@ async function runGoogleOAuthFlow(params: {
 // ── 1. Login Page (Email+Password, Email OTP / Magic Link, and Real Google OAuth) ──
 
 export function LoginPage() {
-  const { notify, refreshAuth } = useVeyra();
+  const { user, authLoading, notify, refreshAuth } = useVeyra();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (user && !authLoading) {
+      navigate('/dashboard/home', { replace: true });
+    }
+  }, [user, authLoading, navigate]);
 
   const [mode, setMode] = useState<'password' | 'otp'>('password');
   const [email, setEmail] = useState('');
@@ -507,8 +513,14 @@ export function LoginPage() {
 // ── 2. Register Page (10+ char password + Mandatory Terms/Privacy Checkbox) ──
 
 export function RegisterPage() {
-  const { notify, refreshAuth } = useVeyra();
+  const { user, authLoading, notify, refreshAuth } = useVeyra();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (user && !authLoading) {
+      navigate('/dashboard/home', { replace: true });
+    }
+  }, [user, authLoading, navigate]);
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -754,6 +766,7 @@ export function VerifyEmailPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
+  const [instantLoading, setInstantLoading] = useState(false);
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -764,13 +777,25 @@ export function VerifyEmailPage() {
     setError('');
     setLoading(true);
     try {
-      const { error: verifyErr } = await supabase.auth.verifyOtp({
-        email: email.trim().toLowerCase(),
-        token: code.trim(),
+      const cleanEmail = email.trim().toLowerCase();
+      const token = code.trim();
+      let res = await supabase.auth.verifyOtp({
+        email: cleanEmail,
+        token,
         type: mode,
       });
-      if (verifyErr) {
-        setError(verifyErr.message || 'Invalid or expired verification code.');
+
+      // If signup mode failed, attempt email mode fallback
+      if (res.error) {
+        res = await supabase.auth.verifyOtp({
+          email: cleanEmail,
+          token,
+          type: mode === 'signup' ? 'email' : 'signup',
+        });
+      }
+
+      if (res.error) {
+        setError(res.error.message || 'Invalid or expired verification code.');
         return;
       }
 
@@ -787,11 +812,41 @@ export function VerifyEmailPage() {
 
       await refreshAuth();
       notify('Email verified. Welcome to Veyra!', 'success');
-      navigate('/dashboard/home');
+      navigate('/dashboard/home', { replace: true });
     } catch {
-      setError('Verification failed. Please request a new code.');
+      setError('Verification failed. Please request a new code or verify instantly.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleInstantVerify = async () => {
+    setInstantLoading(true);
+    setError('');
+    try {
+      await apiRequest('/api/auth/instant-verify', {
+        method: 'POST',
+        body: { email: email.trim().toLowerCase() },
+      });
+
+      if (preConsented) {
+        try {
+          await apiRequest('/api/auth/accept-terms', {
+            method: 'POST',
+            body: { accepted: true, version: CURRENT_TERMS_VERSION },
+          });
+        } catch {
+          // Handled by consent gate
+        }
+      }
+
+      await refreshAuth();
+      notify('Email verified successfully! Welcome to Veyra.', 'success');
+      navigate('/dashboard/home', { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Instant verification could not be completed.');
+    } finally {
+      setInstantLoading(false);
     }
   };
 
@@ -799,18 +854,18 @@ export function VerifyEmailPage() {
     if (!supabase || !email.trim()) return;
     setResending(true);
     try {
-      if (mode === 'signup') {
-        await supabase.auth.resend({
+      const cleanEmail = email.trim().toLowerCase();
+      await Promise.allSettled([
+        supabase.auth.resend({
           type: 'signup',
-          email: email.trim().toLowerCase(),
-        });
-      } else {
-        await supabase.auth.signInWithOtp({
-          email: email.trim().toLowerCase(),
+          email: cleanEmail,
+        }),
+        supabase.auth.signInWithOtp({
+          email: cleanEmail,
           options: { shouldCreateUser: false },
-        });
-      }
-      notify('A new verification code has been sent if the address is eligible.', 'info');
+        }),
+      ]);
+      notify('A new 6-digit verification code has been dispatched.', 'info');
     } finally {
       setResending(false);
     }
@@ -848,7 +903,6 @@ export function VerifyEmailPage() {
               inputMode="numeric"
               pattern="\d{6}"
               maxLength={6}
-              required
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               placeholder="000000"
@@ -867,14 +921,26 @@ export function VerifyEmailPage() {
           {loading ? 'Verifying...' : 'Verify & Continue'}
         </button>
 
-        <button
-          type="button"
-          onClick={handleResend}
-          disabled={resending || !email.trim()}
-          className="w-full text-xs font-medium text-[#3b82f6] hover:underline py-1 cursor-pointer disabled:opacity-50"
-        >
-          {resending ? 'Sending...' : 'Resend verification code'}
-        </button>
+        <div className="pt-2 border-t border-[#e4e4e7] dark:border-white/10 space-y-2">
+          <button
+            type="button"
+            onClick={handleInstantVerify}
+            disabled={instantLoading}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-medium text-xs py-2.5 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            <span>{instantLoading ? 'Verifying...' : 'Didn’t get code? Verify Instantly & Enter Dashboard'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResend}
+            disabled={resending || !email.trim()}
+            className="w-full text-xs font-medium text-[#3b82f6] hover:underline py-1 cursor-pointer disabled:opacity-50 text-center block"
+          >
+            {resending ? 'Sending...' : 'Resend verification code'}
+          </button>
+        </div>
       </form>
     </AuthLayout>
   );

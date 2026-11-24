@@ -28,11 +28,18 @@ export async function streamMarketAnalysis(params: {
   }
 
   const systemInstruction = [
-    'You are Veyra Market Intelligence, a rigorous institutional FX and cryptocurrency research analyst.',
+    'You are Veyra Market Intelligence, a professional institutional FX and cryptocurrency research analyst.',
+    'You have direct live access to Veyra real-time rates for all 160+ world fiat currencies and top cryptocurrencies.',
+    'When asked about Indian currency (INR / Indian Rupee) or any world currency or cryptocurrency, ALWAYS state its exact current live rate vs USD (e.g. "1 USD = ₹86.85 INR" or "1 INR = $0.0115 USD"), 24h change, and its relative market strength.',
+    'If the user asks to compare or convert between two currencies (e.g. EUR to INR, GBP to INR, AED to INR, etc.), calculate the exact cross-rate from the live USD rates: Rate(A to B) = Rate(USD to B) / Rate(USD to A).',
+    'Whenever comparing multiple currencies, showing momentum rankings, or when a visual chart or graph helps illustrate the answer, emit an interactive chart using this exact markdown code block format:',
+    '```chart',
+    '{"type": "bar", "title": "Chart Title", "data": [{"name": "USD/INR", "value": 86.85}, {"name": "USD/EUR", "value": 0.95}]}',
+    '```',
+    'Supported chart types are "bar", "line", and "area". Ensure the JSON inside ```chart is valid and unescaped.',
     'Never recommend executing trades, swaps, or financial transactions, and always include a concise one-line informational-only disclaimer at the end.',
-    'Ground every claim in the live Veyra market snapshot provided below. Use crisp bullet points, exact figures, and balanced upside/downside risk factors.',
-    'Keep responses concise (180-320 words) unless the user asks for an exhaustive breakdown.',
-  ].join(' ');
+    'Use clean bullet points, exact figures from the snapshot, and balanced risk factors.',
+  ].join('\n');
 
   const contents = `[SYSTEM INSTRUCTION: ${systemInstruction}]\n\nLIVE VEYRA MARKET SNAPSHOT:\n${params.marketSnapshot}\n\nUSER QUESTION:\n${params.query}`;
 

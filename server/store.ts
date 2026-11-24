@@ -888,6 +888,57 @@ export async function saveAiAnalysis(
   return item;
 }
 
+export async function getAiUsage(
+  userId: string,
+  isPro: boolean,
+  userToken?: string
+): Promise<{
+  isPro: boolean;
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  resetAt: string;
+  allowed: boolean;
+}> {
+  if (isPro) {
+    return {
+      isPro: true,
+      limit: null,
+      used: 0,
+      remaining: null,
+      resetAt: new Date(Date.now() + 48 * 3600 * 1000).toISOString(),
+      allowed: true,
+    };
+  }
+
+  const windowMs = 48 * 3600 * 1000; // 2 days rolling window
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
+
+  const history = await listAiHistory(userId, userToken);
+  const recent = history.filter((item) => item.created_at >= cutoff);
+  const used = recent.length;
+  const limit = 5;
+  const remaining = Math.max(0, limit - used);
+
+  let oldestTime = Date.now();
+  if (recent.length > 0) {
+    const sorted = [...recent].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    oldestTime = new Date(sorted[0].created_at).getTime();
+  }
+  const resetAt = new Date(oldestTime + windowMs).toISOString();
+
+  return {
+    isPro: false,
+    limit,
+    used,
+    remaining,
+    resetAt,
+    allowed: used < limit,
+  };
+}
+
 // ── User Rights: Export Data & Account Deletion ───────────────────────────────
 
 export async function exportUserData(userId: string): Promise<Record<string, unknown>> {

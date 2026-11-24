@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useVeyra } from '../../context/VeyraContext';
 import { PriceTicker, ThemeToggle } from '../ui/Primitives';
+import { OnboardingModal } from '../OnboardingModal';
 import { cn } from '../../lib/cn';
 import { isProSubscriptionActive } from '../../lib/core';
 
@@ -321,6 +322,8 @@ export function DashboardShell() {
           <Outlet />
         </main>
       </div>
+
+      <OnboardingModal />
     </div>
   );
 }

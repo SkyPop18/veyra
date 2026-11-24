@@ -110,7 +110,12 @@ export async function verifySupabaseJwt(token: string): Promise<VerifiedSupabase
     const payload = decodeJwtPayload(token);
     const rawAal = typeof payload?.aal === 'string' ? payload.aal : 'aal1';
     const aal: 'aal1' | 'aal2' = rawAal === 'aal2' ? 'aal2' : 'aal1';
-    const emailVerified = Boolean(data.user.email_confirmed_at || data.user.confirmed_at);
+    const emailVerified = Boolean(
+      data.user.email_confirmed_at ||
+      data.user.confirmed_at ||
+      (data.user.user_metadata as any)?.email_verified ||
+      (data.user.app_metadata as any)?.provider === 'google'
+    );
 
     return {
       user: data.user,

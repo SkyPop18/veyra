@@ -422,6 +422,7 @@ export function HeatmapPage() {
   const dragStartRef = useRef({ x: 0, y: 0 });
   const isDragMoved = useRef(false);
   const touchDist = useRef<number | null>(null);
+  const animFrameRef = useRef<number | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
   const regions = ['All', 'North America', 'Europe', 'Asia-Pacific', 'Middle East', 'South America', 'Africa'];
@@ -509,14 +510,19 @@ export function HeatmapPage() {
 
   const onMouseMove = (e: React.MouseEvent) => {
     if (!isDragging) return;
-    const dx = Math.abs(e.clientX - (dragStartRef.current.x + pan.x));
-    const dy = Math.abs(e.clientY - (dragStartRef.current.y + pan.y));
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    const dx = Math.abs(clientX - (dragStartRef.current.x + pan.x));
+    const dy = Math.abs(clientY - (dragStartRef.current.y + pan.y));
     if (dx > 4 || dy > 4) isDragMoved.current = true;
 
     if (zoom > 1) {
-      const newX = e.clientX - dragStartRef.current.x;
-      const newY = e.clientY - dragStartRef.current.y;
-      setPan(clampPan(newX, newY, zoom));
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = requestAnimationFrame(() => {
+        const newX = clientX - dragStartRef.current.x;
+        const newY = clientY - dragStartRef.current.y;
+        setPan(clampPan(newX, newY, zoom));
+      });
     }
   };
 
@@ -747,21 +753,15 @@ export function HeatmapPage() {
               onTouchStart={onTouchStart}
               onTouchMove={onTouchMove}
               onTouchEnd={onTouchEnd}
-              className={`relative w-full aspect-[2/1] min-h-[380px] max-h-[620px] select-none overflow-hidden touch-none ${
+              className={`relative w-full aspect-[2/1] min-h-[380px] max-h-[620px] select-none overflow-hidden touch-none rounded-xl ${
                 zoom > 1 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'
               }`}
             >
               <svg
                 viewBox="0 0 1000 500"
                 className="w-full h-full"
-                style={{ filter: 'drop-shadow(0 0 20px rgba(0,0,0,0.2))' }}
               >
                 <defs>
-                  {/* Dotted World Matrix Pattern - Exact halftone map texture */}
-                  <pattern id="dot-matrix" width="6.5" height="6.5" patternUnits="userSpaceOnUse">
-                    <circle cx="3.25" cy="3.25" r="1.35" className="fill-[#64748b]/80 dark:fill-[#cbd5e1]/85" />
-                  </pattern>
-
                   {/* Subtle Grid Pattern for coordinates */}
                   <pattern id="world-grid" width="50" height="50" patternUnits="userSpaceOnUse">
                     <path
@@ -769,28 +769,20 @@ export function HeatmapPage() {
                       fill="none"
                       stroke="currentColor"
                       strokeWidth="0.5"
-                      className="text-black/[0.03] dark:text-white/[0.03]"
+                      className="text-black/[0.04] dark:text-white/[0.04]"
                     />
                   </pattern>
-
-                  {/* Dot glow filters */}
-                  <filter id="glow-strong" x="-50%" y="-50%" width="200%" height="200%">
-                    <feDropShadow dx="0" dy="0" stdDeviation="3.5" floodColor="#10b981" floodOpacity="0.85" />
-                  </filter>
-                  <filter id="glow-moderate" x="-50%" y="-50%" width="200%" height="200%">
-                    <feDropShadow dx="0" dy="0" stdDeviation="3.5" floodColor="#3b82f6" floodOpacity="0.85" />
-                  </filter>
-                  <filter id="glow-active" x="-50%" y="-50%" width="200%" height="200%">
-                    <feDropShadow dx="0" dy="0" stdDeviation="5" floodColor="#ffffff" floodOpacity="0.95" />
-                  </filter>
                 </defs>
 
                 {/* Ocean / Background (Fixed) */}
                 <rect width="1000" height="500" className="fill-[#f1f5f9] dark:fill-[#0a101d]" rx="16" />
                 <rect width="1000" height="500" fill="url(#world-grid)" rx="16" />
 
-                {/* Scaled & Panned Content Group */}
-                <g transform={`translate(${500 + pan.x}, ${250 + pan.y}) scale(${zoom}) translate(-500, -250)`}>
+                {/* Scaled & Panned Content Group (Hardware-accelerated) */}
+                <g
+                  transform={`translate(${500 + pan.x}, ${250 + pan.y}) scale(${zoom}) translate(-500, -250)`}
+                  style={{ willChange: 'transform' }}
+                >
                   {/* Equator & Meridians */}
                   <line
                     x1="0"
@@ -813,20 +805,12 @@ export function HeatmapPage() {
                     className="text-black/10 dark:text-white/10"
                   />
 
-                  {/* Real World Natural Earth Landmasses with Dot-Matrix Texture */}
-                  <g>
-                    {/* Subtle continent silhouette base */}
-                    <path
-                      d={WORLD_MAP_SVG_PATH}
-                      className="fill-[#e2e8f0]/40 dark:fill-[#131d2e]/60 stroke-[#94a3b8]/30 dark:stroke-[#1e2f47]/50"
-                      strokeWidth="0.5"
-                    />
-                    {/* Dot-matrix texture clipped to world geography */}
-                    <path
-                      d={WORLD_MAP_SVG_PATH}
-                      fill="url(#dot-matrix)"
-                    />
-                  </g>
+                  {/* Real World Natural Earth Landmasses (High performance single pass) */}
+                  <path
+                    d={WORLD_MAP_SVG_PATH}
+                    className="fill-[#e2e8f0]/90 dark:fill-[#121c2e] stroke-[#94a3b8]/40 dark:stroke-[#1e2f47]"
+                    strokeWidth="0.65"
+                  />
 
                   {/* Plotting Currency Dots */}
                   {filteredCurrencies.map((c) => {
@@ -871,14 +855,6 @@ export function HeatmapPage() {
                           fill={theme.fill}
                           stroke={isSelected ? '#ffffff' : theme.stroke}
                           strokeWidth={(isSelected ? 2 : 1) * scaleFactor}
-                          style={{
-                            filter:
-                              isSelected || isHovered
-                                ? 'url(#glow-active)'
-                                : c.strengthScore >= 75
-                                  ? 'url(#glow-strong)'
-                                  : 'url(#glow-moderate)',
-                          }}
                         />
 
                         {/* Currency code label for key/active currencies */}
@@ -1301,13 +1277,94 @@ export function WatchlistPage() {
 }
 
 export function AlertsPage() {
-  const { alerts, refreshUserData, notify } = useVeyra();
+  const { alerts, fiat, crypto, refreshUserData, notify } = useVeyra();
   const [symbol, setSymbol] = useState('BTC');
   const [assetType, setAssetType] = useState<'crypto' | 'fiat'>('crypto');
   const [direction, setDirection] = useState<'above' | 'below'>('above');
   const [targetPrice, setTargetPrice] = useState('100000');
   const [notifyDiscord, setNotifyDiscord] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const currentAsset = useMemo(() => {
+    const sym = symbol.trim().toUpperCase();
+    if (assetType === 'crypto') {
+      const c = crypto.find((x) => x.code.toUpperCase() === sym || x.id.toUpperCase() === sym);
+      if (c) {
+        return {
+          symbol: c.code,
+          name: c.name,
+          type: 'crypto' as const,
+          price: c.price_usd,
+          formatted: `$${c.price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: c.price_usd < 1 ? 6 : 2 })}`,
+        };
+      }
+    } else {
+      const f = fiat.find((x) => x.code.toUpperCase() === sym);
+      if (f) {
+        return {
+          symbol: f.code,
+          name: f.name,
+          type: 'fiat' as const,
+          price: f.vsUsdRate,
+          formatted: `1 USD = ${f.vsUsdRate} ${f.code}`,
+        };
+      }
+    }
+    return null;
+  }, [symbol, assetType, crypto, fiat]);
+
+  const filteredAssets = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const fiatList = fiat.map((f) => ({
+      symbol: f.code,
+      name: f.name,
+      country: f.country,
+      type: 'fiat' as const,
+      price: f.vsUsdRate,
+      formattedPrice: `1 USD = ${f.vsUsdRate} ${f.code}`,
+    }));
+    const cryptoList = crypto.map((c) => ({
+      symbol: c.code,
+      name: c.name,
+      country: '',
+      type: 'crypto' as const,
+      price: c.price_usd,
+      formattedPrice: `$${c.price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: c.price_usd < 1 ? 6 : 2 })}`,
+    }));
+
+    const combined = assetType === 'fiat' ? [...fiatList, ...cryptoList] : [...cryptoList, ...fiatList];
+    if (!q) return combined.slice(0, 20);
+
+    return combined
+      .filter(
+        (a) =>
+          a.symbol.toLowerCase().includes(q) ||
+          a.name.toLowerCase().includes(q) ||
+          (a.country && a.country.toLowerCase().includes(q))
+      )
+      .slice(0, 20);
+  }, [fiat, crypto, assetType, searchQuery]);
+
+  const handleSelectAsset = (a: { symbol: string; type: 'fiat' | 'crypto'; price: number }) => {
+    setSymbol(a.symbol);
+    setAssetType(a.type);
+    setSearchQuery(a.symbol);
+    setTargetPrice(String(a.price));
+    setDropdownOpen(false);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1359,19 +1416,59 @@ export function AlertsPage() {
       </div>
 
       <form onSubmit={handleCreate} className="glass-surface p-6 grid sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-        <div className="space-y-1.5">
+        {/* Searchable Combobox Symbol Input */}
+        <div ref={dropdownRef} className="space-y-1.5 relative">
           <label htmlFor="alert-symbol" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            Symbol
+            Symbol / Asset
           </label>
           <input
             id="alert-symbol"
             type="text"
             required
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            placeholder="BTC or EUR"
-            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3 py-2 text-sm uppercase"
+            autoComplete="off"
+            value={dropdownOpen ? searchQuery : symbol}
+            onFocus={() => {
+              setSearchQuery(symbol);
+              setDropdownOpen(true);
+            }}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSymbol(e.target.value.toUpperCase());
+              setDropdownOpen(true);
+            }}
+            placeholder="Search BTC, EUR, INR..."
+            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3 py-2 text-sm uppercase focus:outline-none focus:border-[#3b82f6]"
           />
+
+          {dropdownOpen && (
+            <div className="absolute left-0 top-full mt-1 w-72 max-h-60 overflow-y-auto rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#12161f] shadow-2xl z-50 p-1 space-y-0.5">
+              {filteredAssets.length === 0 ? (
+                <div className="p-3 text-xs text-[#71717a] text-center">No matching currencies found.</div>
+              ) : (
+                filteredAssets.map((a) => (
+                  <button
+                    key={`${a.type}-${a.symbol}`}
+                    type="button"
+                    onClick={() => handleSelectAsset(a)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-xs hover:bg-[#f4f4f5] dark:hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="flex items-center gap-1.5 font-bold text-[#09090b] dark:text-white">
+                        <span>{a.symbol}</span>
+                        <span className="text-[10px] font-normal px-1 rounded bg-[#e4e4e7]/60 dark:bg-white/10 text-[#71717a] dark:text-[#a1a1aa]">
+                          {a.type}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#71717a] dark:text-[#a1a1aa] truncate">{a.name}</p>
+                    </div>
+                    <span className="font-mono-num font-semibold text-[#2563eb] dark:text-[#60a5fa] shrink-0 text-right">
+                      {a.formattedPrice}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
 
         <div className="space-y-1.5">
@@ -1405,9 +1502,16 @@ export function AlertsPage() {
         </div>
 
         <div className="space-y-1.5">
-          <label htmlFor="alert-price" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            Target Price
-          </label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="alert-price" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+              Target Price
+            </label>
+            {currentAsset && (
+              <span className="text-[10px] font-semibold text-[#2563eb] dark:text-[#60a5fa] truncate ml-1">
+                Live: {currentAsset.formatted}
+              </span>
+            )}
+          </div>
           <input
             id="alert-price"
             type="number"
