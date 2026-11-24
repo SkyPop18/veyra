@@ -39,11 +39,19 @@ interface AiUsageStats {
   allowed: boolean;
 }
 
-const STORAGE_KEY = 'veyra_active_ai_chat';
+const LEGACY_STORAGE_KEY = 'veyra_active_ai_chat';
 
-function loadPersistedChat(): ChatTurn[] {
+function getAiChatStorageKey(userId?: string | null): string | null {
+  return userId ? `veyra_active_ai_chat_${userId}` : null;
+}
+
+function loadPersistedChat(userId?: string | null): ChatTurn[] {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    // Always purge the legacy unscoped key so chats never cross accounts
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+    const key = getAiChatStorageKey(userId);
+    if (!key) return [];
+    const raw = window.localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -72,13 +80,14 @@ export function AiAnalysisPage() {
   const isPro = isProSubscriptionActive(user);
 
   const [prompt, setPrompt] = useState('');
-  const [messages, setMessages] = useState<ChatTurn[]>(loadPersistedChat);
+  const [messages, setMessages] = useState<ChatTurn[]>(() => loadPersistedChat(user?.id));
   const [history, setHistory] = useState<AiAnalysisEntry[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [usage, setUsage] = useState<AiUsageStats | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const loadedUserIdRef = useRef<string | undefined>(user?.id);
 
   const refreshUsage = async () => {
     try {
@@ -97,6 +106,21 @@ export function AiAnalysisPage() {
   };
 
   useEffect(() => {
+    if (loadedUserIdRef.current !== user?.id) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setStreaming(false);
+      setPrompt('');
+      loadedUserIdRef.current = user?.id;
+      setMessages(loadPersistedChat(user?.id));
+    }
+
+    if (!user?.id) {
+      setHistory([]);
+      setUsage(null);
+      return;
+    }
+
     void refreshUsage();
     void apiRequest<{ items: AiAnalysisEntry[] }>('/api/ai/history')
       .then((res) => setHistory(Array.isArray(res?.items) ? res.items : []))
@@ -104,22 +128,28 @@ export function AiAnalysisPage() {
     return () => {
       abortRef.current?.abort();
     };
-  }, [isPro]);
+  }, [user?.id, isPro]);
 
   useEffect(() => {
     try {
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      // Do not persist a previous account's turns under a newly active user ID
+      if (loadedUserIdRef.current !== user?.id) return;
+      const key = getAiChatStorageKey(user?.id);
+      if (!key) return;
+
       const cleanToPersist = messages.filter(
         (m) => !(m.role === 'assistant' && !m.text && !m.error)
       );
       if (cleanToPersist.length > 0) {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanToPersist));
+        window.localStorage.setItem(key, JSON.stringify(cleanToPersist));
       } else {
-        window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.removeItem(key);
       }
     } catch {
       // Ignore storage errors
     }
-  }, [messages]);
+  }, [messages, user?.id]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -132,7 +162,11 @@ export function AiAnalysisPage() {
     setMessages([]);
     setPrompt('');
     try {
-      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      const key = getAiChatStorageKey(user?.id);
+      if (key) {
+        window.localStorage.removeItem(key);
+      }
     } catch {
       // Ignore
     }

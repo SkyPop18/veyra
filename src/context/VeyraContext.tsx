@@ -30,6 +30,8 @@ interface VeyraContextValue {
   emailVerified: boolean;
   termsAccepted: boolean;
   aal: 'aal1' | 'aal2';
+  passwordRecovery: boolean;
+  clearPasswordRecovery: () => void;
   authLoading: boolean;
   refreshAuth: () => Promise<void>;
   logout: () => Promise<void>;
@@ -88,6 +90,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
   const [emailVerified, setEmailVerified] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [aal, setAal] = useState<'aal1' | 'aal2'>('aal1');
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
 
   const [fiat, setFiat] = useState<FiatCurrency[]>([]);
@@ -187,6 +190,24 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
       setCryptoLoadingMore(false);
     }
   }, [cryptoLoadingMore, cryptoHasMore, cryptoPage, notify]);
+
+  const clearClientStorage = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const savedTheme = window.localStorage.getItem('veyra_theme');
+      window.localStorage.clear();
+      if (savedTheme === 'light' || savedTheme === 'dark') {
+        window.localStorage.setItem('veyra_theme', savedTheme);
+      }
+      window.sessionStorage.clear();
+    } catch {
+      // Ignore storage cleanup errors
+    }
+  }, []);
+
+  const clearPasswordRecovery = useCallback(() => {
+    setPasswordRecovery(false);
+  }, []);
 
   const clearUserData = useCallback(() => {
     setWatchlist([]);
@@ -296,22 +317,28 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
     if (!supabase) return;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       setMemoryAuthToken(session?.access_token ?? null);
+      if (event === 'PASSWORD_RECOVERY') {
+        setPasswordRecovery(true);
+      }
       if (event === 'SIGNED_OUT') {
+        setPasswordRecovery(false);
         setUser(null);
         userRef.current = null;
         setEmailVerified(false);
         setTermsAccepted(false);
+        setAal('aal1');
         clearUserData();
+        clearClientStorage();
         setAuthLoading(false);
       } else {
-        // INITIAL_SESSION, SIGNED_IN, TOKEN_REFRESHED, USER_UPDATED
+        // INITIAL_SESSION, SIGNED_IN, TOKEN_REFRESHED, USER_UPDATED, PASSWORD_RECOVERY
         void refreshAuth(true);
       }
     });
     return () => {
       data.subscription.unsubscribe();
     };
-  }, [refreshAuth, clearUserData]);
+  }, [refreshAuth, clearUserData, clearClientStorage]);
 
   const setUserDirect = useCallback(
     (nextUser: UserProfile | null) => {
@@ -326,30 +353,44 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    if (supabase) {
-      await supabase.auth.signOut({ scope: 'local' });
+    try {
+      if (supabase) {
+        await supabase.auth.signOut({ scope: 'local' });
+      }
+    } catch {
+      // Proceed with local storage cleanup even if remote sign-out fails
     }
     setMemoryAuthToken(null);
+    setPasswordRecovery(false);
     setUser(null);
+    userRef.current = null;
     setEmailVerified(false);
     setTermsAccepted(false);
     setAal('aal1');
     clearUserData();
+    clearClientStorage();
     notify('Signed out of Veyra.', 'info');
-  }, [clearUserData, notify]);
+  }, [clearClientStorage, clearUserData, notify]);
 
   const logoutEverywhere = useCallback(async () => {
-    if (supabase) {
-      await supabase.auth.signOut({ scope: 'global' });
+    try {
+      if (supabase) {
+        await supabase.auth.signOut({ scope: 'global' });
+      }
+    } catch {
+      // Proceed with local storage cleanup even if remote sign-out fails
     }
     setMemoryAuthToken(null);
+    setPasswordRecovery(false);
     setUser(null);
+    userRef.current = null;
     setEmailVerified(false);
     setTermsAccepted(false);
     setAal('aal1');
     clearUserData();
+    clearClientStorage();
     notify('Signed out from all devices and active sessions.', 'success');
-  }, [clearUserData, notify]);
+  }, [clearClientStorage, clearUserData, notify]);
 
   const toggleWatchlist = useCallback(
     async (symbol: string, assetType: 'fiat' | 'crypto') => {
@@ -458,6 +499,8 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
         emailVerified,
         termsAccepted,
         aal,
+        passwordRecovery,
+        clearPasswordRecovery,
         authLoading,
         refreshAuth,
         logout,

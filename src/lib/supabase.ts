@@ -22,3 +22,18 @@ if (isSupabaseConfigured) {
 }
 
 export const supabase = client;
+
+/**
+ * Returns the canonical origin for Supabase Auth email and OAuth redirects so
+ * preview deployments always route back to the primary production domain.
+ */
+export function getAuthBaseOrigin(): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return window.location.origin;
+    }
+    return 'https://veyra-global.vercel.app';
+  }
+  return 'https://veyra-global.vercel.app';
+}

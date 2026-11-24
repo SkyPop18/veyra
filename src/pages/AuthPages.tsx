@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useVeyra } from '../context/VeyraContext';
 import { ThemeToggle } from '../components/ui/Primitives';
-import { isSupabaseClientReady, supabase } from '../lib/supabase';
+import { getAuthBaseOrigin, isSupabaseClientReady, supabase } from '../lib/supabase';
 import { apiRequest } from '../lib/api';
 import { CURRENT_TERMS_VERSION, MIN_PASSWORD_LENGTH, isValidPassword } from '../lib/core';
 import type { UserProfile } from '../types/veyra';
@@ -101,19 +101,6 @@ function isInsideIframe(): boolean {
   } catch {
     return true;
   }
-}
-
-function getAuthBaseOrigin(): string {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname;
-    // On local development, preserve local host and port
-    if (host === 'localhost' || host === '127.0.0.1') {
-      return window.location.origin;
-    }
-    // For all deployments, strictly enforce canonical public production domain
-    return 'https://veyra-global.vercel.app';
-  }
-  return 'https://veyra-global.vercel.app';
 }
 
 async function runGoogleOAuthFlow(params: {
@@ -905,36 +892,71 @@ export function VerifyEmailPage() {
 
 // ── 4. OAuth / Magic Link Callback Handler (/auth/callback) ───────────────────
 
+function isRecoverySessionJwt(accessToken?: string | null): boolean {
+  if (!accessToken) return false;
+  try {
+    const parts = accessToken.split('.');
+    if (parts.length < 2) return false;
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const claims = JSON.parse(atob(b64)) as { amr?: Array<{ method?: string }> };
+    return Array.isArray(claims.amr) && claims.amr.some((item) => item?.method === 'recovery');
+  } catch {
+    return false;
+  }
+}
+
 export function AuthCallbackPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const { refreshAuth, notify } = useVeyra();
   const [status, setStatus] = useState('Completing secure sign-in...');
+  const handledCodeRef = useRef(false);
 
   useEffect(() => {
     let active = true;
+    let recoveryEventDetected =
+      params.get('type') === 'recovery' || window.location.hash.includes('type=recovery');
+
     const finish = async () => {
-      if (!supabase) {
+      const sb = supabase;
+      if (!sb) {
         navigate('/login', { replace: true });
         return;
       }
 
+      const { data: sub } = sb.auth.onAuthStateChange((event) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          recoveryEventDetected = true;
+        }
+      });
+
       const code = params.get('code');
-      const consented = params.get('consented') === '1';
 
       try {
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (code && !handledCodeRef.current) {
+          handledCodeRef.current = true;
+          const { error } = await sb.auth.exchangeCodeForSession(code);
           if (error) {
-            if (active) setStatus('Authentication link expired or invalid. Redirecting to sign in...');
-            window.setTimeout(() => navigate('/login', { replace: true }), 1800);
-            return;
+            const { data: fallback } = await sb.auth.getSession();
+            if (!fallback.session) {
+              if (active) setStatus('Authentication link expired or invalid. Redirecting to sign in...');
+              window.setTimeout(() => navigate('/login', { replace: true }), 1800);
+              return;
+            }
           }
         }
 
-        const { data } = await supabase.auth.getSession();
+        const { data } = await sb.auth.getSession();
         if (!data.session) {
           navigate('/login', { replace: true });
+          return;
+        }
+
+        if (recoveryEventDetected || isRecoverySessionJwt(data.session.access_token)) {
+          await refreshAuth();
+          if (active) {
+            navigate('/reset-password', { replace: true });
+          }
           return;
         }
 
@@ -954,6 +976,8 @@ export function AuthCallbackPage() {
         navigate('/dashboard/home', { replace: true });
       } catch {
         if (active) navigate('/login', { replace: true });
+      } finally {
+        sub.subscription.unsubscribe();
       }
     };
 
@@ -1049,11 +1073,90 @@ export function ForgotPasswordPage() {
 
 export function ResetPasswordPage() {
   const navigate = useNavigate();
-  const { notify } = useVeyra();
+  const [searchParams] = useSearchParams();
+  const { clearPasswordRecovery, notify } = useVeyra();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
+  const [linkError, setLinkError] = useState('');
+  const [checkingLink, setCheckingLink] = useState(true);
+  const [sessionReady, setSessionReady] = useState(false);
   const [loading, setLoading] = useState(false);
+  const handledCodeRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    const sb = supabase;
+    if (!sb) {
+      setLinkError('Authentication client is not configured.');
+      setCheckingLink(false);
+      return;
+    }
+
+    const { data: sub } = sb.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      if (
+        (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN' || event === 'INITIAL_SESSION') &&
+        session
+      ) {
+        setSessionReady(true);
+        setLinkError('');
+        setCheckingLink(false);
+      }
+    });
+
+    const verifyRecovery = async () => {
+      try {
+        const code = searchParams.get('code');
+        const tokenHash = searchParams.get('token_hash');
+        const type = searchParams.get('type');
+
+        if (code && !handledCodeRef.current) {
+          handledCodeRef.current = true;
+          const { error: exErr } = await sb.auth.exchangeCodeForSession(code);
+          window.history.replaceState({}, document.title, '/reset-password');
+          if (exErr) {
+            const { data: fallback } = await sb.auth.getSession();
+            if (!fallback.session && active) {
+              setLinkError('This password reset link is invalid or has expired. Request a new reset link.');
+              setCheckingLink(false);
+              return;
+            }
+          }
+        } else if (tokenHash && type === 'recovery' && !handledCodeRef.current) {
+          handledCodeRef.current = true;
+          const { error: otpErr } = await sb.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' });
+          window.history.replaceState({}, document.title, '/reset-password');
+          if (otpErr && active) {
+            setLinkError('This password reset link is invalid or has expired. Request a new reset link.');
+            setCheckingLink(false);
+            return;
+          }
+        }
+
+        const { data } = await sb.auth.getSession();
+        if (!active) return;
+        if (data.session) {
+          setSessionReady(true);
+          setLinkError('');
+        } else {
+          setLinkError('Open the password reset link from your email inbox to set a new password.');
+        }
+      } catch {
+        if (active) {
+          setLinkError('Unable to verify password reset link. Request a fresh reset link.');
+        }
+      } finally {
+        if (active) setCheckingLink(false);
+      }
+    };
+
+    void verifyRecovery();
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [searchParams]);
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1066,7 +1169,7 @@ export function ResetPasswordPage() {
       return;
     }
     if (!supabase) {
-      setError('Supabase Auth is not configured.');
+      setError('Authentication client is not configured.');
       return;
     }
 
@@ -1078,8 +1181,14 @@ export function ResetPasswordPage() {
         setError(updErr.message);
         return;
       }
+      clearPasswordRecovery();
+      try {
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch {
+        // Ignore sign-out errors after password update
+      }
       notify('Your password has been updated. Please sign in.', 'success');
-      navigate('/login');
+      navigate('/login', { replace: true });
     } catch {
       setError('Unable to update password. Request a fresh reset link.');
     } finally {
@@ -1092,48 +1201,69 @@ export function ResetPasswordPage() {
       title="Choose a new password"
       subtitle={`Enter a strong password of at least ${MIN_PASSWORD_LENGTH} characters.`}
     >
-      <form onSubmit={handleUpdate} className="space-y-4">
-        <div className="space-y-1.5">
-          <label htmlFor="rp-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            New Password (min {MIN_PASSWORD_LENGTH} chars)
-          </label>
-          <input
-            id="rp-pass"
-            type="password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
-          />
+      {checkingLink ? (
+        <div className="py-6 text-center space-y-3 text-xs text-[#71717a]">
+          <div className="h-5 w-5 mx-auto rounded-full border-2 border-[#3b82f6] border-t-transparent animate-spin" />
+          <p>Verifying password reset link...</p>
         </div>
-        <div className="space-y-1.5">
-          <label htmlFor="rp-confirm" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            Confirm New Password
-          </label>
-          <input
-            id="rp-confirm"
-            type="password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            autoComplete="new-password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
-          />
+      ) : linkError && !sessionReady ? (
+        <div className="space-y-4 text-xs">
+          <div role="alert" className="rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-[#ef4444] leading-relaxed">
+            {linkError}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Link to="/forgot-password" className="font-semibold text-[#3b82f6] hover:underline">
+              Request a new reset link
+            </Link>
+            <Link to="/login" className="font-medium text-[#52525b] dark:text-[#a1a1aa] hover:underline">
+              Return to Sign In
+            </Link>
+          </div>
         </div>
+      ) : (
+        <form onSubmit={handleUpdate} className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="rp-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+              New Password (min {MIN_PASSWORD_LENGTH} chars)
+            </label>
+            <input
+              id="rp-pass"
+              type="password"
+              required
+              minLength={MIN_PASSWORD_LENGTH}
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="rp-confirm" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+              Confirm New Password
+            </label>
+            <input
+              id="rp-confirm"
+              type="password"
+              required
+              minLength={MIN_PASSWORD_LENGTH}
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
+            />
+          </div>
 
-        {error && <p role="alert" className="text-xs font-medium text-[#ef4444]">{error}</p>}
+          {error && <p role="alert" className="text-xs font-medium text-[#ef4444]">{error}</p>}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white font-medium text-sm py-2.5 transition-colors cursor-pointer disabled:opacity-50"
-        >
-          {loading ? 'Updating Password...' : 'Update Password'}
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white font-medium text-sm py-2.5 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {loading ? 'Updating Password...' : 'Update Password'}
+          </button>
+        </form>
+      )}
     </AuthLayout>
   );
 }

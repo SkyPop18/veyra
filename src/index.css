@@ -58,11 +58,6 @@
 .hero-tablet-3d {
   transform: rotateY(-12deg) rotateX(6deg) rotateZ(1.2deg);
   transform-style: preserve-3d;
-  transition: transform 450ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.hero-tablet-3d:hover {
-  transform: rotateY(-6deg) rotateX(3deg) rotateZ(0.4deg);
 }
 
 @media (max-width: 1024px) {

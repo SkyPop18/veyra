@@ -122,15 +122,29 @@ function ConsentGateRoute({ children }: { children: React.ReactNode }) {
 function GlobalAuthCodeInterceptor() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { passwordRecovery } = useVeyra();
 
   useEffect(() => {
-    if (location.pathname !== '/auth/callback') {
+    if (passwordRecovery && location.pathname !== '/reset-password') {
+      navigate(`/reset-password${location.search}${location.hash}`, { replace: true });
+      return;
+    }
+
+    if (location.pathname !== '/auth/callback' && location.pathname !== '/reset-password') {
       const searchParams = new URLSearchParams(location.search);
-      if (searchParams.has('code') || location.hash.includes('access_token')) {
-        navigate(`/auth/callback${location.search}${location.hash}`, { replace: true });
+      const hasAuthPayload = searchParams.has('code') || location.hash.includes('access_token');
+      const isRecoveryPayload =
+        searchParams.get('type') === 'recovery' || location.hash.includes('type=recovery');
+
+      if (hasAuthPayload) {
+        if (isRecoveryPayload) {
+          navigate(`/reset-password${location.search}${location.hash}`, { replace: true });
+        } else {
+          navigate(`/auth/callback${location.search}${location.hash}`, { replace: true });
+        }
       }
     }
-  }, [location, navigate]);
+  }, [location, navigate, passwordRecovery]);
 
   return null;
 }
