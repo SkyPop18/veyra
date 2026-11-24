@@ -50,7 +50,7 @@ export function createSignedAdminToken(userId: string, purpose: 'session' | 'rea
   return `${userId}.${expStr}.${sig}`;
 }
 
-export function setAdminReauthCookie(res: Response, userId: string, isSecure: boolean) {
+export function setAdminReauthCookie(res: Response, userId: string, isSecure: boolean): string {
   const token = createSignedAdminToken(userId, 'reauth', ADMIN_REAUTH_WINDOW_MS);
   res.cookie('veyra_admin_reauth', token, {
     httpOnly: true,
@@ -59,6 +59,7 @@ export function setAdminReauthCookie(res: Response, userId: string, isSecure: bo
     maxAge: ADMIN_REAUTH_WINDOW_MS,
     path: '/',
   });
+  return token;
 }
 
 export function clearAdminCookies(res: Response) {
@@ -163,6 +164,10 @@ export function recordAdminReauth(userId: string) {
 }
 
 export function hasRecentAdminReauth(userId: string, req?: Request): boolean {
+  const headerToken = req?.headers['x-admin-reauth'];
+  if (typeof headerToken === 'string' && verifySignedAdminToken(headerToken, userId, 'reauth')) {
+    return true;
+  }
   const cookieToken = req?.cookies?.veyra_admin_reauth;
   if (typeof cookieToken === 'string' && verifySignedAdminToken(cookieToken, userId, 'reauth')) {
     return true;

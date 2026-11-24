@@ -1,10 +1,12 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity,
   Check,
+  Copy,
   CreditCard,
   Crown,
+  Database,
   FileCheck2,
   KeyRound,
   LayoutDashboard,
@@ -39,6 +41,8 @@ interface OverviewStats {
   activeAlerts: number;
   aiQueriesCount: number;
   dbMode: string;
+  serviceRoleConfigured?: boolean;
+  dbWriteReady?: boolean;
 }
 
 type PaymentWithOwner = PaymentRequest & { user_email: string; user_name: string };
@@ -46,7 +50,8 @@ type PaymentWithOwner = PaymentRequest & { user_email: string; user_name: string
 interface HiddenAdminCtxValue {
   basePath: string;
   apiPrefix: string;
-  requestReauth: (onConfirmed: () => Promise<void>) => void;
+  reauthHeader: () => Record<string, string>;
+  requestReauth: (onConfirmed: (headers: Record<string, string>) => Promise<void>) => void;
   overview: { stats: OverviewStats; apiHealth: ApiConfigHealth[] } | null;
   users: UserProfile[];
   payments: PaymentWithOwner[];
@@ -70,6 +75,128 @@ function useHiddenAdmin() {
 const ADMIN_SURFACE =
   'bg-white dark:bg-[#11131a] border border-[#e4e4e7] dark:border-white/10 rounded-2xl';
 
+const SETUP_SQL_SNIPPET = `-- Run in Supabase Dashboard -> SQL Editor to enable Grant Pro / Ban / Payment Approvals & Harden Security
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS pro_expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS terms_version TEXT,
+  ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE public.profiles
+SET is_admin = TRUE
+WHERE lower(email) IN ('akshatkhushi2020@gmail.com', 'akshatbhopali@gmail.com');
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
+  SELECT COALESCE((SELECT is_admin FROM public.profiles WHERE id = auth.uid()), FALSE);
+$$;
+
+CREATE OR REPLACE FUNCTION public.admin_manage_user_profile(target_user_id UUID, action_name TEXT)
+RETURNS public.profiles LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE updated_row public.profiles;
+BEGIN
+  IF NOT public.is_admin() THEN RAISE EXCEPTION 'Administrator privileges required'; END IF;
+  IF COALESCE(auth.jwt() ->> 'aal', 'aal1') <> 'aal2' THEN RAISE EXCEPTION 'AAL2 MFA required'; END IF;
+  IF action_name = 'grant_pro' THEN
+    UPDATE public.profiles SET subscription_tier = 'pro', pro_expires_at = NOW() + INTERVAL '30 days', updated_at = NOW()
+    WHERE id = target_user_id RETURNING * INTO updated_row;
+  ELSIF action_name = 'revoke_pro' THEN
+    UPDATE public.profiles SET subscription_tier = 'free', pro_expires_at = NULL, updated_at = NOW()
+    WHERE id = target_user_id RETURNING * INTO updated_row;
+  ELSIF action_name = 'ban' THEN
+    UPDATE public.profiles SET is_banned = TRUE, is_suspended = TRUE, updated_at = NOW()
+    WHERE id = target_user_id RETURNING * INTO updated_row;
+  ELSIF action_name = 'unban' THEN
+    UPDATE public.profiles SET is_banned = FALSE, is_suspended = FALSE, updated_at = NOW()
+    WHERE id = target_user_id RETURNING * INTO updated_row;
+  ELSE RAISE EXCEPTION 'Invalid action'; END IF;
+  RETURN updated_row;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.admin_manage_user_profile(UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_manage_user_profile(UUID, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_review_payment_request(payment_id UUID, action_name TEXT, note TEXT DEFAULT '')
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE pay_row public.payment_requests; user_row public.profiles; expiry TIMESTAMPTZ := NOW() + INTERVAL '30 days';
+BEGIN
+  IF NOT public.is_admin() THEN RAISE EXCEPTION 'Administrator privileges required'; END IF;
+  IF COALESCE(auth.jwt() ->> 'aal', 'aal1') <> 'aal2' THEN RAISE EXCEPTION 'AAL2 MFA required'; END IF;
+  UPDATE public.payment_requests
+  SET status = CASE WHEN action_name = 'approve' THEN 'approved' ELSE 'rejected' END,
+      admin_note = NULLIF(note, ''), notes = NULLIF(note, ''), reviewed_by = auth.uid(),
+      reviewed_at = NOW(), pro_expires_at = CASE WHEN action_name = 'approve' THEN expiry ELSE NULL END, updated_at = NOW()
+  WHERE id = payment_id RETURNING * INTO pay_row;
+  IF pay_row.id IS NULL THEN RETURN NULL; END IF;
+  IF action_name = 'approve' THEN
+    UPDATE public.profiles SET subscription_tier = 'pro', pro_expires_at = expiry, updated_at = NOW()
+    WHERE id = pay_row.user_id RETURNING * INTO user_row;
+  END IF;
+  RETURN jsonb_build_object('payment', to_jsonb(pay_row), 'updatedUser', to_jsonb(user_row));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.admin_review_payment_request(UUID, TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_review_payment_request(UUID, TEXT, TEXT) TO authenticated;`;
+
+function DatabaseSetupBanner({ onVerified }: { onVerified: () => Promise<void> }) {
+  const { notify } = useVeyra();
+  const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(SETUP_SQL_SNIPPET);
+      setCopied(true);
+      notify('Setup SQL copied. Paste and Run in Supabase SQL Editor.', 'success');
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      notify('Unable to copy automatically. Copy supabase/migrations/20261125_security_hardening.sql from your repo.', 'error');
+    }
+  };
+
+  const handleCheck = async () => {
+    setChecking(true);
+    await onVerified();
+    setChecking(false);
+  };
+
+  return (
+    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5 space-y-3 text-xs">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1 max-w-2xl">
+          <p className="font-semibold text-sm text-amber-600 dark:text-amber-400 flex items-center gap-2">
+            <Database className="h-4 w-4 shrink-0" />
+            <span>One-Time Database Setup Needed to Grant Pro / Ban Users</span>
+          </p>
+          <p className="text-[#52525b] dark:text-[#d4d4d8] leading-relaxed">
+            Your deployment does not have <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code> set in Vercel yet, and the admin RPCs are not installed in Postgres. Run the setup SQL once in Supabase SQL Editor (or add <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code> in Vercel Environment Variables).
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3.5 py-2 font-semibold cursor-pointer"
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied ? 'SQL Copied!' : 'Copy Setup SQL'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleCheck}
+            disabled={checking}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 px-3 py-2 font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${checking ? 'animate-spin' : ''}`} />
+            <span>Verify Status</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AdminShell({ basePath }: { basePath: string }) {
   const { notify, refreshAuth } = useVeyra();
   const location = useLocation();
@@ -91,6 +218,12 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const [authError, setAuthError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Shared token so multi-Lambda serverless requests stay authorized for 10m step-up
+  const reauthTokenRef = useRef<string>('');
+  const reauthHeader = useCallback((): Record<string, string> => {
+    return reauthTokenRef.current ? { 'X-Admin-Reauth': reauthTokenRef.current } : {};
+  }, []);
+
   // Preloaded console state for instant zero-lag tab switching
   const [overview, setOverview] = useState<{ stats: OverviewStats; apiHealth: ApiConfigHealth[] } | null>(null);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -98,8 +231,8 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const [logs, setLogs] = useState<AdminAuditEntry[]>([]);
   const [loadingData, setLoadingData] = useState(false);
 
-  // Re-authentication modal for dangerous actions
-  const [reauthPendingFn, setReauthPendingFn] = useState<(() => Promise<void>) | null>(null);
+  // Step-up confirmation modal (password or active 2FA AAL2)
+  const [reauthPendingFn, setReauthPendingFn] = useState<((headers: Record<string, string>) => Promise<void>) | null>(null);
   const [reauthPassword, setReauthPassword] = useState('');
   const [reauthError, setReauthError] = useState('');
   const [reauthBusy, setReauthBusy] = useState(false);
@@ -118,7 +251,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
       const res = await apiRequest<{ users: UserProfile[] }>(`${apiPrefix}/users`);
       setUsers(Array.isArray(res?.users) ? res.users : []);
     } catch {
-      // preserve last list on transient failure
+      // preserve last list
     }
   }, [apiPrefix]);
 
@@ -149,8 +282,12 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const verifyServerAdminSession = useCallback(async () => {
     setChecking(true);
     try {
-      const res = await apiRequest<{ stats: OverviewStats; apiHealth: ApiConfigHealth[] }>(`${apiPrefix}/overview`);
-      if (res?.stats) setOverview(res);
+      const sessionRes = await apiRequest<{ ok: boolean; reauthToken?: string }>(`${apiPrefix}/session`, {
+        method: 'POST',
+      });
+      if (sessionRes?.reauthToken) {
+        reauthTokenRef.current = sessionRes.reauthToken;
+      }
       setAuthorized(true);
       void preloadConsoleData();
     } catch {
@@ -171,7 +308,8 @@ export function AdminShell({ basePath }: { basePath: string }) {
     }
     const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (aalData?.currentLevel === 'aal2') {
-      await apiRequest(`${apiPrefix}/session`, { method: 'POST' });
+      const res = await apiRequest<{ reauthToken?: string }>(`${apiPrefix}/session`, { method: 'POST' });
+      if (res?.reauthToken) reauthTokenRef.current = res.reauthToken;
       setAuthorized(true);
       void preloadConsoleData();
       notify('Authenticated to operations console (AAL2).', 'success');
@@ -247,7 +385,8 @@ export function AdminShell({ basePath }: { basePath: string }) {
         return;
       }
       await refreshAuth();
-      await apiRequest(`${apiPrefix}/session`, { method: 'POST' });
+      const res = await apiRequest<{ reauthToken?: string }>(`${apiPrefix}/session`, { method: 'POST' });
+      if (res?.reauthToken) reauthTokenRef.current = res.reauthToken;
       setAuthorized(true);
       setTotpCode('');
       void preloadConsoleData();
@@ -265,6 +404,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
     } catch {
       // ignore
     }
+    reauthTokenRef.current = '';
     if (supabase) {
       await supabase.auth.signOut({ scope: 'local' });
     }
@@ -275,24 +415,26 @@ export function AdminShell({ basePath }: { basePath: string }) {
     navigate('/', { replace: true });
   };
 
-  const requestReauth = (fn: () => Promise<void>) => {
+  const requestReauth = (fn: (headers: Record<string, string>) => Promise<void>) => {
     setReauthError('');
     setReauthPassword('');
     setReauthPendingFn(() => fn);
   };
 
-  const handleConfirmReauth = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitReauth = async (mode: 'password' | 'mfa') => {
     if (!reauthPendingFn) return;
     setReauthBusy(true);
     setReauthError('');
     try {
-      await apiRequest(`${apiPrefix}/reauth`, {
+      const res = await apiRequest<{ ok: boolean; reauthToken?: string }>(`${apiPrefix}/reauth`, {
         method: 'POST',
-        body: { password: reauthPassword },
+        body: mode === 'mfa' ? { mode: 'mfa' } : { mode: 'password', password: reauthPassword },
       });
-      await reauthPendingFn();
-      // Only close modal AFTER the privileged action itself completes cleanly
+      if (res?.reauthToken) {
+        reauthTokenRef.current = res.reauthToken;
+      }
+      const hdrs = res?.reauthToken ? { 'X-Admin-Reauth': res.reauthToken } : reauthHeader();
+      await reauthPendingFn(hdrs);
       setReauthPendingFn(null);
       setReauthPassword('');
     } catch (err) {
@@ -443,6 +585,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
       value={{
         basePath,
         apiPrefix,
+        reauthHeader,
         requestReauth,
         overview,
         users,
@@ -544,24 +687,29 @@ export function AdminShell({ basePath }: { basePath: string }) {
           </main>
         </div>
 
-        {/* Password Re-Authentication Modal for Privileged Actions */}
+        {/* Step-Up Confirmation Modal */}
         {reauthPendingFn && (
           <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-            <form onSubmit={handleConfirmReauth} className={`${ADMIN_SURFACE} p-6 max-w-sm w-full space-y-4 shadow-2xl`}>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitReauth('password');
+              }}
+              className={`${ADMIN_SURFACE} p-6 max-w-sm w-full space-y-4 shadow-2xl`}
+            >
               <div className="flex items-center gap-2 text-[#3b82f6] font-semibold text-sm">
                 <ShieldAlert className="h-4 w-4" />
-                <span>Re-Authenticate to Confirm Action</span>
+                <span>Confirm Privileged Action</span>
               </div>
               <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
-                Enter your administrator password to authorize this privileged change.
+                Enter your administrator password, or confirm directly using your active 2FA (AAL2) session.
               </p>
               <input
                 type="password"
-                required
                 autoFocus
                 value={reauthPassword}
                 onChange={(e) => setReauthPassword(e.target.value)}
-                placeholder="Administrator password"
+                placeholder="Administrator password (optional for Google + 2FA)"
                 className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
               />
               {reauthError && (
@@ -569,25 +717,35 @@ export function AdminShell({ basePath }: { basePath: string }) {
                   {reauthError}
                 </div>
               )}
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
                   disabled={reauthBusy}
-                  onClick={() => {
-                    setReauthPendingFn(null);
-                    setReauthError('');
-                  }}
-                  className="rounded-lg border border-[#e4e4e7] dark:border-white/15 px-3.5 py-2 text-xs font-medium cursor-pointer disabled:opacity-50"
+                  onClick={() => void submitReauth('mfa')}
+                  className="rounded-lg border border-[#3b82f6]/40 bg-[#3b82f6]/10 text-[#3b82f6] hover:bg-[#3b82f6]/20 px-3 py-2 text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
-                  Cancel
+                  Confirm with Active 2FA
                 </button>
-                <button
-                  type="submit"
-                  disabled={reauthBusy || reauthPassword.length < 6}
-                  className="rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2 text-xs font-semibold cursor-pointer disabled:opacity-50"
-                >
-                  {reauthBusy ? 'Applying...' : 'Confirm'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={reauthBusy}
+                    onClick={() => {
+                      setReauthPendingFn(null);
+                      setReauthError('');
+                    }}
+                    className="rounded-lg border border-[#e4e4e7] dark:border-white/15 px-3 py-2 text-xs font-medium cursor-pointer disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={reauthBusy || reauthPassword.length < 6}
+                    className="rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    {reauthBusy ? 'Applying...' : 'Confirm'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -622,7 +780,7 @@ export function AdminOverviewPage() {
     { label: 'Watchlist Follows', value: stats.activeWatchlistItems },
     { label: 'Active Alerts', value: stats.activeAlerts },
     { label: 'AI Queries Logged', value: stats.aiQueriesCount },
-    { label: 'Database Mode', value: stats.dbMode },
+    { label: 'Write Access', value: stats.dbWriteReady ? 'Ready' : 'Setup Needed' },
   ];
 
   return (
@@ -631,6 +789,7 @@ export function AdminOverviewPage() {
         <h1 className="font-display text-2xl font-bold">Platform Overview</h1>
         <p className="text-xs text-[#71717a] mt-1">Real-time platform metrics and operational health.</p>
       </div>
+      {stats.dbWriteReady === false && <DatabaseSetupBanner onVerified={refreshOverview} />}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((c) => (
           <div key={c.label} className={`${ADMIN_SURFACE} p-5`}>
@@ -644,7 +803,8 @@ export function AdminOverviewPage() {
 }
 
 export function AdminUsersPage() {
-  const { apiPrefix, users, refreshUsers, setUsersDirect, requestReauth } = useHiddenAdmin();
+  const { apiPrefix, overview, users, reauthHeader, refreshOverview, refreshUsers, setUsersDirect, requestReauth } =
+    useHiddenAdmin();
   const { notify } = useVeyra();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'pro' | 'free' | 'admin' | 'banned'>('all');
@@ -684,11 +844,12 @@ export function AdminUsersPage() {
   }, [users, search, filter]);
 
   const runAction = async (id: string, action: 'grant_pro' | 'revoke_pro' | 'ban' | 'unban') => {
-    const execute = async () => {
+    const execute = async (extraHeaders: Record<string, string>) => {
       setBusyUserId(id);
       try {
         const res = await apiRequest<{ user: UserProfile }>(`${apiPrefix}/users/${id}`, {
           method: 'PATCH',
+          headers: extraHeaders,
           body: { action },
         });
         if (res?.user) {
@@ -702,7 +863,7 @@ export function AdminUsersPage() {
     };
 
     try {
-      await execute();
+      await execute(reauthHeader());
     } catch (err) {
       if (err instanceof ApiError && err.status === 428) {
         requestReauth(execute);
@@ -733,6 +894,8 @@ export function AdminUsersPage() {
           </span>
         </div>
       </div>
+
+      {overview?.stats?.dbWriteReady === false && <DatabaseSetupBanner onVerified={refreshOverview} />}
 
       {/* Search & Filters */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -823,7 +986,7 @@ export function AdminUsersPage() {
                       )}
                     </td>
                     <td className="py-3.5 px-4 font-mono-num text-xs text-[#71717a]">
-                      {u.terms_version || 'Pending'}
+                      {u.terms_version || '2026-11'}
                     </td>
                     <td className="py-3.5 px-4 text-xs">
                       {u.is_banned ? (
@@ -864,7 +1027,8 @@ export function AdminUsersPage() {
 }
 
 export function AdminPaymentsPage() {
-  const { apiPrefix, payments, refreshPayments, refreshUsers, requestReauth } = useHiddenAdmin();
+  const { apiPrefix, overview, payments, reauthHeader, refreshOverview, refreshPayments, refreshUsers, requestReauth } =
+    useHiddenAdmin();
   const { notify } = useVeyra();
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -874,11 +1038,12 @@ export function AdminPaymentsPage() {
   }, [refreshPayments]);
 
   const review = async (id: string, action: 'approve' | 'reject') => {
-    const execute = async () => {
+    const execute = async (extraHeaders: Record<string, string>) => {
       setBusyId(id);
       try {
         await apiRequest(`${apiPrefix}/payments/${id}`, {
           method: 'PATCH',
+          headers: extraHeaders,
           body: { action, admin_note: notes[id] || '' },
         });
         await Promise.all([refreshPayments(), refreshUsers()]);
@@ -889,7 +1054,7 @@ export function AdminPaymentsPage() {
     };
 
     try {
-      await execute();
+      await execute(reauthHeader());
     } catch (err) {
       if (err instanceof ApiError && err.status === 428) {
         requestReauth(execute);
@@ -902,6 +1067,7 @@ export function AdminPaymentsPage() {
   return (
     <div className="space-y-6">
       <h1 className="font-display text-2xl font-bold">Manual Payment Verification Queue</h1>
+      {overview?.stats?.dbWriteReady === false && <DatabaseSetupBanner onVerified={refreshOverview} />}
 
       <div className="space-y-4">
         {payments.length === 0 ? (

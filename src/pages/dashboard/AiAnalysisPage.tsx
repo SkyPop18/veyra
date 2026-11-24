@@ -1,6 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, BarChart2, Crown, PlusCircle, Send, Sparkles } from 'lucide-react';
+import {
+  ArrowRight,
+  BarChart2,
+  Crown,
+  PlusCircle,
+  RotateCcw,
+  Send,
+  Sparkles,
+} from 'lucide-react';
 import { useVeyra } from '../../context/VeyraContext';
 import { isProSubscriptionActive } from '../../lib/core';
 import { apiRequest, getActiveAccessToken } from '../../lib/api';
@@ -11,7 +19,7 @@ const SUGGESTED_PROMPTS = [
   'What is the live USD/INR rate and India currency momentum?',
   'Show me a chart comparing USD vs EUR vs GBP vs INR rates.',
   'What is the current BTC outlook given today’s Fear & Greed Index?',
-  'Compare USD vs EUR vs CHF relative strength this week.',
+  'Compare USD vs EUR vs CHF relative strength this week with a chart.',
 ];
 
 interface ChatTurn {
@@ -19,6 +27,7 @@ interface ChatTurn {
   role: 'user' | 'assistant';
   text: string;
   error?: boolean;
+  retryQuery?: string;
 }
 
 interface AiUsageStats {
@@ -38,10 +47,18 @@ function loadPersistedChat(): ChatTurn[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Drop any stale empty assistant placeholders left by an interrupted session
-        return parsed.filter(
-          (m: ChatTurn) => !(m && m.role === 'assistant' && !m.text && !m.error)
-        );
+        return parsed.filter((m: ChatTurn) => {
+          if (!m || !m.role) return false;
+          // Drop stale empty assistant bubbles or outdated legacy blocking messages
+          if (m.role === 'assistant' && !m.text && !m.error) return false;
+          if (
+            m.error &&
+            (m.text.includes('Terms & Conditions') || m.text.includes('Veyra Pro subscription'))
+          ) {
+            return false;
+          }
+          return true;
+        });
       }
     }
   } catch {
@@ -60,13 +77,14 @@ export function AiAnalysisPage() {
   const [streaming, setStreaming] = useState(false);
   const [usage, setUsage] = useState<AiUsageStats | null>(null);
 
-  // Load usage statistics
+  const abortRef = useRef<AbortController | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
   const refreshUsage = async () => {
     try {
       const res = await apiRequest<AiUsageStats>('/api/ai/usage');
       setUsage(res);
     } catch {
-      // Fallback usage state
       setUsage({
         isPro,
         limit: isPro ? null : 5,
@@ -80,13 +98,21 @@ export function AiAnalysisPage() {
 
   useEffect(() => {
     void refreshUsage();
+    void apiRequest<{ items: AiAnalysisEntry[] }>('/api/ai/history')
+      .then((res) => setHistory(Array.isArray(res?.items) ? res.items : []))
+      .catch(() => {});
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [isPro]);
 
-  // Keep active chat persistent across window/tab changes and browser restarts
   useEffect(() => {
     try {
-      if (messages.length > 0) {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      const cleanToPersist = messages.filter(
+        (m) => !(m.role === 'assistant' && !m.text && !m.error)
+      );
+      if (cleanToPersist.length > 0) {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanToPersist));
       } else {
         window.localStorage.removeItem(STORAGE_KEY);
       }
@@ -95,7 +121,14 @@ export function AiAnalysisPage() {
     }
   }, [messages]);
 
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages]);
+
   const handleStartNewChat = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
     setMessages([]);
     setPrompt('');
     try {
@@ -104,12 +137,6 @@ export function AiAnalysisPage() {
       // Ignore
     }
   };
-
-  useEffect(() => {
-    void apiRequest<{ items: AiAnalysisEntry[] }>('/api/ai/history')
-      .then((res) => setHistory(res.items))
-      .catch(() => {});
-  }, [isPro]);
 
   const isLimitReached = !isPro && usage !== null && usage.remaining !== null && usage.remaining <= 0;
 
@@ -121,6 +148,10 @@ export function AiAnalysisPage() {
       notify('Free message limit reached (5 messages / 2 days). Upgrade to Pro for unlimited analyses.', 'error');
       return;
     }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const userMsg: ChatTurn = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
     const assistantId = `a-${Date.now() + 1}`;
@@ -140,12 +171,27 @@ export function AiAnalysisPage() {
         method: 'POST',
         headers,
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({ query: trimmed }),
       });
 
       if (!res.ok) {
-        const errJson = (await res.json().catch(() => ({}))) as { error?: string; upgradeRequired?: boolean };
+        const errJson = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(errJson.error || `AI analysis request failed (${res.status})`);
+      }
+
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('application/json')) {
+        const json = (await res.json()) as { text?: string; entry?: AiAnalysisEntry; error?: string };
+        if (json.error) throw new Error(json.error);
+        const answer = json.text || json.entry?.response || '';
+        if (!answer.trim()) throw new Error('Empty response received from market analyst.');
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, text: answer } : m))
+        );
+        if (json.entry) setHistory((prev) => [json.entry!, ...prev]);
+        void refreshUsage();
+        return;
       }
 
       const reader = res.body?.getReader();
@@ -196,12 +242,15 @@ export function AiAnalysisPage() {
       }
 
       if (!receivedAnyChunk) {
-        throw new Error('No response was received from the market analyst. Please try again.');
+        throw new Error('No response was received from the market analyst. Please retry.');
       }
     } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : 'Unable to generate market analysis right now.';
       setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? { ...m, text: msg, error: true } : m))
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, text: msg, error: true, retryQuery: trimmed } : m
+        )
       );
       notify(msg, 'error');
       void refreshUsage();
@@ -261,7 +310,7 @@ export function AiAnalysisPage() {
                   Real-Time Currency &amp; Market Intelligence
                 </h2>
                 <p className="text-xs text-[#52525b] dark:text-[#a1a1aa] leading-relaxed">
-                  Ask questions about Indian Rupee (INR), USD, EUR, GBP, or any global currency. Veyra AI calculates exact cross-rates, generates visual graphs, and provides geopolitical analysis.
+                  Ask questions about Indian Rupee (INR), USD, EUR, GBP, or any global currency. Veyra AI calculates exact cross-rates, generates interactive charts, and provides macro context.
                 </p>
               </div>
 
@@ -279,33 +328,50 @@ export function AiAnalysisPage() {
               </div>
             </div>
           ) : (
-            messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
+            <>
+              {messages.map((msg) => (
                 <div
-                  className={`max-w-[88%] sm:max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                    msg.role === 'user'
-                      ? 'bg-[#3b82f6] text-white whitespace-pre-wrap'
-                      : msg.error
-                        ? 'bg-[#ef4444]/10 border border-[#ef4444]/30 text-[#ef4444] whitespace-pre-wrap'
-                        : 'bg-[#f4f4f5] dark:bg-white/[0.06] text-[#09090b] dark:text-[#fafafa]'
-                  }`}
+                  key={msg.id}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  {msg.role === 'user' || msg.error ? (
-                    msg.text
-                  ) : msg.text ? (
-                    <MarkdownView content={msg.text} />
-                  ) : (
-                    <span className="italic text-[#71717a] dark:text-[#a1a1aa] flex items-center gap-2">
-                      <span className="h-2 w-2 rounded-full bg-[#3b82f6] animate-pulse" />
-                      <span>Synthesizing live currency data &amp; telemetry...</span>
-                    </span>
-                  )}
+                  <div
+                    className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-[#3b82f6] text-white whitespace-pre-wrap'
+                        : msg.error
+                          ? 'bg-[#ef4444]/10 border border-[#ef4444]/30 text-[#ef4444]'
+                          : 'bg-[#f4f4f5] dark:bg-white/[0.06] text-[#09090b] dark:text-[#fafafa]'
+                    }`}
+                  >
+                    {msg.role === 'user' ? (
+                      msg.text
+                    ) : msg.error ? (
+                      <div className="space-y-2">
+                        <p className="whitespace-pre-wrap text-xs">{msg.text}</p>
+                        {msg.retryQuery && (
+                          <button
+                            type="button"
+                            onClick={() => void sendQuestion(msg.retryQuery!)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#ef4444]/40 bg-[#ef4444]/10 px-2.5 py-1 text-xs font-semibold hover:bg-[#ef4444]/20 cursor-pointer"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>Retry</span>
+                          </button>
+                        )}
+                      </div>
+                    ) : msg.text ? (
+                      <MarkdownView content={msg.text} />
+                    ) : (
+                      <span className="italic text-[#71717a] dark:text-[#a1a1aa] flex items-center gap-2 text-xs">
+                        <span className="h-2 w-2 rounded-full bg-[#3b82f6] animate-pulse" />
+                        <span>Synthesizing live currency data &amp; telemetry...</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+              <div ref={bottomRef} />
+            </>
           )}
         </div>
 
@@ -353,7 +419,7 @@ export function AiAnalysisPage() {
           />
           <button
             type="submit"
-            disabled={streaming || prompt.trim().length < 3 || isLimitReached}
+            disabled={streaming || prompt.trim().length < 2 || isLimitReached}
             className="inline-flex items-center gap-2 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2.5 text-sm font-semibold cursor-pointer disabled:opacity-50"
           >
             <Send className="h-4 w-4" />

@@ -77,6 +77,7 @@ import {
 } from './server/supabase.ts';
 import { generateMarketAnalysis, rankNewsArticlesWithGemini, streamMarketAnalysis } from './server/gemini.ts';
 import {
+  buildUnifiedStrengthList,
   CURRENT_TERMS_VERSION,
   hasAcceptedCurrentTerms,
   isProSubscriptionActive,
@@ -127,7 +128,7 @@ async function requireAuthenticatedUser(
 }
 
 /**
- * Mandatory VEYRA v2 Gate: requires verified Supabase session + confirmed email + accepted current Terms & Privacy.
+ * Mandatory VEYRA Gate: requires verified Supabase session + confirmed email + active non-banned account.
  */
 async function requireConsentedUser(
   req: AuthedRequest,
@@ -145,13 +146,6 @@ async function requireConsentedUser(
     return res.status(403).json({
       error: 'Please verify your email address before accessing Veyra.',
       code: 'EMAIL_NOT_VERIFIED',
-    });
-  }
-  if (!hasAcceptedCurrentTerms(req.userProfile)) {
-    return res.status(403).json({
-      error: 'You must accept the current Terms & Conditions and Privacy Policy before continuing.',
-      code: 'TERMS_ACCEPTANCE_REQUIRED',
-      termsVersion: CURRENT_TERMS_VERSION,
     });
   }
   return next();
@@ -791,7 +785,8 @@ export function createApiApp() {
 
   const aiPromptSchema = z
     .object({
-      query: z.string().trim().min(4).max(1200),
+      query: z.string().trim().min(2).max(1200),
+      stream: z.boolean().optional(),
     })
     .strict();
 
@@ -816,22 +811,24 @@ export function createApiApp() {
         });
       }
 
-      const rl = checkRateLimit(`ai:${req.userProfile!.id}`, 20, 60 * 1000);
+      const rl = checkRateLimit(`ai:${uid}`, 20, 60 * 1000);
       if (!rl.allowed) {
         return res.status(429).json({ error: `Rate limit reached. Try again in ${rl.retryAfterSec}s.` });
       }
 
       const parsed = aiPromptSchema.safeParse(req.body);
       if (!parsed.success) {
-        return res.status(400).json({ error: 'Enter a market question between 4 and 1200 characters.' });
+        return res.status(400).json({ error: 'Enter a market question between 2 and 1200 characters.' });
       }
 
-      const [strength, fg, liveFiat, liveCrypto] = await Promise.all([
-        buildStrengthLeaderboard(),
-        fetchFearAndGreed(),
+      const [liveFiat, liveCrypto, fg] = await Promise.all([
         fetchLiveFiatCurrencies(),
-        fetchLiveCryptoAssets(),
+        fetchLiveCryptoAssets(1, 60),
+        fetchFearAndGreed(),
       ]);
+
+      const cryptoCoins = Array.isArray(liveCrypto?.coins) ? liveCrypto.coins : [];
+      const strength = buildUnifiedStrengthList(liveFiat.currencies || [], cryptoCoins);
 
       // Key currency rates vs USD
       const keyCodes = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AED', 'CAD', 'AUD', 'CHF', 'CNY', 'SGD', 'BRL', 'MXN', 'ZAR', 'SAR', 'KRW'];
@@ -850,7 +847,6 @@ export function createApiApp() {
         .map(([code, rate]) => `${code}: ${rate}`)
         .join(', ');
 
-      const cryptoCoins = Array.isArray(liveCrypto?.coins) ? liveCrypto.coins : [];
       const topCrypto = cryptoCoins
         .slice(0, 15)
         .map((c) => `${c.symbol}: $${c.current_price} (24h: ${c.price_change_percentage_24h > 0 ? '+' : ''}${c.price_change_percentage_24h}%)`)
@@ -869,6 +865,13 @@ export function createApiApp() {
         `Fear & Greed Index:\n${fg.current.value} (${fg.current.classification})`,
       ].join('\n\n');
 
+      // JSON non-streaming mode if requested explicitly
+      if (parsed.data.stream === false || req.query.stream === '0') {
+        const fullText = await generateMarketAnalysis({ query: parsed.data.query, marketSnapshot: snapshot });
+        const entry = await saveAiAnalysis(uid, parsed.data.query, fullText, Math.ceil(fullText.length / 4), req.sbSession?.token);
+        return res.json({ ok: true, text: fullText, entry });
+      }
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
@@ -885,7 +888,7 @@ export function createApiApp() {
             res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
           },
         });
-        const entry = await saveAiAnalysis(req.userProfile!.id, parsed.data.query, fullText, tokensUsed, req.sbSession?.token);
+        const entry = await saveAiAnalysis(uid, parsed.data.query, fullText, tokensUsed, req.sbSession?.token);
         res.write(`data: ${JSON.stringify({ done: true, entry })}\n\n`);
         res.end();
       } catch (err) {
@@ -1000,18 +1003,23 @@ export function createApiApp() {
         return res.status(404).json({ error: 'Not found.' });
       }
 
-      const rl = checkRateLimit(`admin-auth:${ip}`, 5, 15 * 60 * 1000);
-      if (!rl.allowed) {
-        return res.status(429).json({
-          error: `Too many authentication attempts. Try again in ${rl.retryAfterSec}s.`,
-        });
-      }
-
       const ok = await resolveSupabaseAuth(req);
       if (!ok || !req.userProfile || !req.sbSession) {
+        const rl = checkRateLimit(`admin-auth-fail:${ip}`, 5, 15 * 60 * 1000);
+        if (!rl.allowed) {
+          return res.status(429).json({
+            error: `Too many authentication attempts. Try again in ${rl.retryAfterSec}s.`,
+          });
+        }
         return res.status(401).json({ error: 'Invalid credentials.' });
       }
       if (!isEmailInAdminAllowlist(req.userProfile.email)) {
+        const rl = checkRateLimit(`admin-auth-fail:${ip}`, 5, 15 * 60 * 1000);
+        if (!rl.allowed) {
+          return res.status(429).json({
+            error: `Too many authentication attempts. Try again in ${rl.retryAfterSec}s.`,
+          });
+        }
         return res.status(403).json({ error: 'Access denied.' });
       }
       req.userProfile.is_admin = true;
@@ -1024,7 +1032,7 @@ export function createApiApp() {
 
       startAdminActivity(req.userProfile.id);
       const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
-      setAdminReauthCookie(res, req.userProfile.id, isHttps);
+      const reauthToken = setAdminReauthCookie(res, req.userProfile.id, isHttps);
 
       await recordAdminAudit({
         admin_id: req.userProfile.id,
@@ -1037,39 +1045,55 @@ export function createApiApp() {
         userToken: req.sbSession.token,
       });
 
-      return res.json({ ok: true, admin: { email: req.userProfile.email, aal: req.sbSession.aal } });
+      return res.json({
+        ok: true,
+        reauthToken,
+        admin: { email: req.userProfile.email, aal: req.sbSession.aal },
+      });
     });
 
-    // Re-authentication step-up before dangerous admin actions (verifies password with Supabase Auth)
-    const reauthSchema = z.object({ password: z.string().min(10).max(128) }).strict();
+    // Re-authentication step-up before dangerous admin actions (verifies password OR allows fresh AAL2 TOTP confirmation)
+    const reauthSchema = z
+      .object({
+        password: z.string().min(6).max(128).optional(),
+        mode: z.enum(['password', 'mfa']).optional(),
+      })
+      .strict();
     app.post(adminPaths('/reauth'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
       const ip = getClientIp(req);
-      const rl = checkRateLimit(`admin-reauth:${ip}:${req.userProfile!.id}`, 5, 15 * 60 * 1000);
+      const rl = checkRateLimit(`admin-reauth:${ip}:${req.userProfile!.id}`, 8, 15 * 60 * 1000);
       if (!rl.allowed) {
         return res.status(429).json({ error: `Too many attempts. Try again in ${rl.retryAfterSec}s.` });
       }
 
       const parsed = reauthSchema.safeParse(req.body);
       if (!parsed.success) {
-        return res.status(400).json({ error: 'Enter your current password to confirm.' });
+        return res.status(400).json({ error: 'Enter your current password or verify with 2FA to confirm.' });
       }
 
-      const sbPublic = getSupabasePublic();
-      if (!sbPublic) {
-        return res.status(503).json({ error: 'Authentication service unavailable.' });
-      }
-      const { error } = await sbPublic.auth.signInWithPassword({
-        email: req.userProfile!.email,
-        password: parsed.data.password,
-      });
-      if (error) {
-        return res.status(401).json({ error: 'Password confirmation failed.' });
+      if (parsed.data.mode !== 'mfa') {
+        if (!parsed.data.password) {
+          return res.status(400).json({ error: 'Enter your current password to confirm.' });
+        }
+        const sbPublic = getSupabasePublic();
+        if (!sbPublic) {
+          return res.status(503).json({ error: 'Authentication service unavailable.' });
+        }
+        const { error } = await sbPublic.auth.signInWithPassword({
+          email: req.userProfile!.email,
+          password: parsed.data.password,
+        });
+        if (error) {
+          return res.status(401).json({ error: 'Password confirmation failed. If you signed up with Google, use Authenticator verification instead.' });
+        }
+      } else if (req.sbSession?.aal !== 'aal2') {
+        return res.status(403).json({ error: 'AAL2 authenticator session required.' });
       }
 
       recordAdminReauth(req.userProfile!.id);
       const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
-      setAdminReauthCookie(res, req.userProfile!.id, isHttps);
-      return res.json({ ok: true });
+      const reauthToken = setAdminReauthCookie(res, req.userProfile!.id, isHttps);
+      return res.json({ ok: true, reauthToken });
     });
 
     app.post(adminPaths('/logout'), requireHiddenAdmin, async (req: AuthedRequest, res) => {

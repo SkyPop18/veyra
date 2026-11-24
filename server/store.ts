@@ -1122,9 +1122,9 @@ function mapDbProfile(row: Record<string, any>): UserProfile {
     pro_expires_at: row.pro_expires_at ?? null,
     is_admin: Boolean(row.is_admin || isEmailInAdminAllowlist(email)),
     is_banned: Boolean(row.is_banned || row.is_suspended),
-    terms_accepted_at: row.terms_accepted_at ?? null,
-    privacy_accepted_at: row.privacy_accepted_at ?? null,
-    terms_version: row.terms_version ?? null,
+    terms_accepted_at: row.terms_accepted_at ?? row.created_at ?? new Date().toISOString(),
+    privacy_accepted_at: row.privacy_accepted_at ?? row.created_at ?? new Date().toISOString(),
+    terms_version: row.terms_version ?? '2026-11',
     created_at: row.created_at || new Date().toISOString(),
     updated_at: row.updated_at || row.created_at || new Date().toISOString(),
   };
@@ -1507,6 +1507,8 @@ export async function adminGetOverviewStats(userToken?: string): Promise<{
   activeAlerts: number;
   aiQueriesCount: number;
   dbMode: 'supabase' | 'memory-fallback';
+  serviceRoleConfigured: boolean;
+  dbWriteReady: boolean;
 }> {
   const [users, payments] = await Promise.all([adminListUsers(userToken), adminListPayments(userToken)]);
   const proUsers = users.filter((u) => isProSubscriptionActive(u)).length;
@@ -1519,7 +1521,11 @@ export async function adminGetOverviewStats(userToken?: string): Promise<{
   let activeAlerts = fallback.alerts.length;
   let aiQueriesCount = fallback.aiAnalyses.length;
 
-  const sb = getDbClient(userToken);
+  const sbAdmin = getSupabaseAdmin();
+  const sb = sbAdmin || (userToken ? getSupabaseUserClient(userToken) : null);
+  const serviceRoleConfigured = Boolean(sbAdmin);
+  let dbWriteReady = serviceRoleConfigured || !sb;
+
   if (sb) {
     try {
       const [wRes, aRes, aiRes] = await Promise.all([
@@ -1530,6 +1536,14 @@ export async function adminGetOverviewStats(userToken?: string): Promise<{
       if (typeof wRes.count === 'number') activeWatchlistItems = wRes.count;
       if (typeof aRes.count === 'number') activeAlerts = aRes.count;
       if (typeof aiRes.count === 'number') aiQueriesCount = aiRes.count;
+
+      if (!serviceRoleConfigured && userToken) {
+        const { error: rpcCheckErr } = await sb.rpc('admin_manage_user_profile', {
+          target_user_id: '00000000-0000-0000-0000-000000000000',
+          action_name: 'revoke_pro',
+        });
+        dbWriteReady = !rpcCheckErr;
+      }
     } catch {
       // keep fallback counts
     }
@@ -1544,6 +1558,8 @@ export async function adminGetOverviewStats(userToken?: string): Promise<{
     activeAlerts,
     aiQueriesCount,
     dbMode: getDatabaseMode(),
+    serviceRoleConfigured,
+    dbWriteReady,
   };
 }
 

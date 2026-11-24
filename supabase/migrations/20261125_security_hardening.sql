@@ -35,6 +35,11 @@ ALTER TABLE public.admin_audit_log
 -- 2. Revoke ALL direct table privileges from anonymous role
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 
+-- Ensure allowlisted ops admins can pass public.is_admin() RLS checks
+UPDATE public.profiles
+SET is_admin = TRUE
+WHERE lower(email) IN ('akshatkhushi2020@gmail.com', 'akshatbhopali@gmail.com');
+
 -- 3. Non-recursive admin helper
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN

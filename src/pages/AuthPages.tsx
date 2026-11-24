@@ -343,14 +343,17 @@ export function LoginPage() {
     await runGoogleOAuthFlow({
       consented: false,
       onSuccess: async () => {
-        await refreshAuth();
-        const me = await apiRequest<{ termsAccepted: boolean }>('/api/auth/me');
-        if (!me.termsAccepted) {
-          navigate('/accept-terms', { replace: true });
-        } else {
-          notify('Welcome back to Veyra.', 'success');
-          navigate('/dashboard/home', { replace: true });
+        try {
+          await apiRequest('/api/auth/accept-terms', {
+            method: 'POST',
+            body: { accepted: true, version: CURRENT_TERMS_VERSION },
+          });
+        } catch {
+          // ignore
         }
+        await refreshAuth();
+        notify('Welcome back to Veyra.', 'success');
+        navigate('/dashboard/home', { replace: true });
       },
       onError: (msg) => setError(msg),
       onDone: () => setLoading(false),
@@ -508,6 +511,18 @@ export function LoginPage() {
         <GoogleIcon />
         <span>Continue with Google</span>
       </button>
+
+      <p className="text-[11px] text-center text-[#71717a] leading-relaxed">
+        By signing in, you agree to Veyra&apos;s{' '}
+        <Link to="/terms" className="text-[#3b82f6] hover:underline">
+          Terms &amp; Conditions
+        </Link>{' '}
+        and{' '}
+        <Link to="/privacy" className="text-[#3b82f6] hover:underline">
+          Privacy Policy
+        </Link>
+        .
+      </p>
 
       <p className="text-xs text-center text-[#71717a]">
         New to Veyra?{' '}
@@ -923,27 +938,20 @@ export function AuthCallbackPage() {
           return;
         }
 
-        if (consented) {
-          try {
-            await apiRequest('/api/auth/accept-terms', {
-              method: 'POST',
-              body: { accepted: true, version: CURRENT_TERMS_VERSION },
-            });
-          } catch {
-            // Gate will handle consent if needed
-          }
+        try {
+          await apiRequest('/api/auth/accept-terms', {
+            method: 'POST',
+            body: { accepted: true, version: CURRENT_TERMS_VERSION },
+          });
+        } catch {
+          // Non-blocking
         }
 
         await refreshAuth();
-        const me = await apiRequest<{ termsAccepted: boolean }>('/api/auth/me');
         if (!active) return;
 
-        if (!me.termsAccepted) {
-          navigate('/accept-terms', { replace: true });
-        } else {
-          notify('Signed in to Veyra.', 'success');
-          navigate('/dashboard/home', { replace: true });
-        }
+        notify('Signed in to Veyra.', 'success');
+        navigate('/dashboard/home', { replace: true });
       } catch {
         if (active) navigate('/login', { replace: true });
       }
