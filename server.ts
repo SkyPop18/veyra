@@ -117,8 +117,8 @@ async function requireAuthenticatedUser(
   if (!ok || !req.userProfile || !req.sbSession) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (req.userProfile.is_banned) {
-    return res.status(403).json({ error: 'This account has been suspended.' });
+  if (req.userProfile.is_banned || (req.userProfile as any).is_suspended || req.userProfile.email?.startsWith('deleted_')) {
+    return res.status(403).json({ error: 'This account has been deleted or suspended.' });
   }
   return next();
 }
@@ -135,8 +135,8 @@ async function requireConsentedUser(
   if (!ok || !req.userProfile || !req.sbSession) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (req.userProfile.is_banned) {
-    return res.status(403).json({ error: 'This account has been suspended.' });
+  if (req.userProfile.is_banned || (req.userProfile as any).is_suspended || req.userProfile.email?.startsWith('deleted_')) {
+    return res.status(403).json({ error: 'This account has been deleted or suspended.' });
   }
   if (!req.sbSession.emailVerified && !(req.userProfile as any).email_verified) {
     return res.status(403).json({
@@ -456,7 +456,8 @@ export function createApiApp() {
 
   // User Privacy Right: Delete My Account
   app.delete('/api/auth/account', requireAuthenticatedUser, async (req: AuthedRequest, res) => {
-    const result = await deleteUserAccount(req.userProfile!.id);
+    const userToken = extractBearerToken(req);
+    const result = await deleteUserAccount(req.userProfile!.id, userToken);
     return res.json({
       ok: true,
       deletedAuth: result.deletedAuth,

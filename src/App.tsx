@@ -1,5 +1,5 @@
-import React from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { VeyraProvider, useVeyra } from './context/VeyraContext';
 import { LandingPage } from './pages/LandingPage';
 import {
@@ -119,12 +119,29 @@ function ConsentGateRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function GlobalAuthCodeInterceptor() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (location.pathname !== '/auth/callback') {
+      const searchParams = new URLSearchParams(location.search);
+      if (searchParams.has('code') || location.hash.includes('access_token')) {
+        navigate(`/auth/callback${location.search}${location.hash}`, { replace: true });
+      }
+    }
+  }, [location, navigate]);
+
+  return null;
+}
+
 export default function App() {
   const hiddenAdminBasePath = getServerValidatedAdminBasePath();
 
   return (
     <VeyraProvider>
       <BrowserRouter>
+        <GlobalAuthCodeInterceptor />
         <Routes>
           {/* Public Routes */}
           <Route path="/" element={<LandingPage />} />

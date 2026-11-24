@@ -72,6 +72,9 @@ test('compareStrengthEntries computes accurate delta and stronger verdict', () =
 test('isProSubscriptionActive enforces tier and 30-day expiry timestamp', () => {
   const now = Date.parse('2026-11-22T12:00:00Z');
   assert.equal(isProSubscriptionActive({ subscription_tier: 'free', pro_expires_at: null }, now), false);
+  assert.equal(isProSubscriptionActive({ subscription_tier: 'pro', pro_expires_at: null }, now), false);
+  assert.equal(isProSubscriptionActive({ subscription_tier: 'pro', pro_expires_at: undefined }, now), false);
+  assert.equal(isProSubscriptionActive({ subscription_tier: 'pro', pro_expires_at: '' }, now), false);
   assert.equal(
     isProSubscriptionActive({ subscription_tier: 'pro', pro_expires_at: '2026-12-20T12:00:00Z' }, now),
     true

@@ -106,11 +106,12 @@ function isInsideIframe(): boolean {
 function getAuthBaseOrigin(): string {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
-    // Always use the canonical production domain on Vercel
-    if (host.includes('vercel.app')) {
-      return 'https://veyra-global.vercel.app';
+    // On local development, preserve local host and port
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return window.location.origin;
     }
-    return window.location.origin;
+    // For all deployments, strictly enforce canonical public production domain
+    return 'https://veyra-global.vercel.app';
   }
   return 'https://veyra-global.vercel.app';
 }
@@ -133,7 +134,12 @@ async function runGoogleOAuthFlow(params: {
   if (!isInsideIframe()) {
     const { error: oauthErr } = await sb.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo },
+      options: {
+        redirectTo,
+        queryParams: {
+          prompt: 'select_account',
+        },
+      },
     });
     if (oauthErr) {
       params.onError(oauthErr.message);
@@ -150,6 +156,9 @@ async function runGoogleOAuthFlow(params: {
     options: {
       redirectTo,
       skipBrowserRedirect: true,
+      queryParams: {
+        prompt: 'select_account',
+      },
     },
   });
 

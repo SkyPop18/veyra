@@ -131,7 +131,8 @@ export function isProSubscriptionActive(
   nowMs: number = Date.now()
 ): boolean {
   if (!profile || profile.subscription_tier !== 'pro') return false;
-  if (!profile.pro_expires_at) return true;
+  // A valid Pro membership strictly requires an active future expiration timestamp
+  if (!profile.pro_expires_at) return false;
   const expiryMs = Date.parse(profile.pro_expires_at);
   if (Number.isNaN(expiryMs)) return false;
   return expiryMs > nowMs;

@@ -77,6 +77,10 @@ export async function getOrCreateProfileFromSupabaseUser(
   authUser: SupabaseAuthUser
 ): Promise<UserProfile> {
   const email = (authUser.email || '').toLowerCase();
+  if (authUser.user_metadata?.deleted === true) {
+    throw new Error('This account has been permanently deleted.');
+  }
+
   const fullName =
     (typeof authUser.user_metadata?.full_name === 'string' && authUser.user_metadata.full_name.trim()) ||
     (typeof authUser.user_metadata?.name === 'string' && authUser.user_metadata.name.trim()) ||
@@ -96,15 +100,27 @@ export async function getOrCreateProfileFromSupabaseUser(
         .maybeSingle();
 
       if (existing) {
+        if (existing.is_banned || existing.is_suspended || (existing.email && existing.email.startsWith('deleted_'))) {
+          throw new Error('This account has been permanently deleted.');
+        }
         const normalized = normalizeProStatus(existing as UserProfile);
         if (
           existing.subscription_tier === 'pro' &&
           normalized.subscription_tier === 'free'
         ) {
-          await sb
-            .from('profiles')
-            .update({ subscription_tier: 'free', pro_expires_at: null })
-            .eq('id', authUser.id);
+          try {
+            await sb
+              .from('profiles')
+              .update({ subscription_tier: 'free', pro_expires_at: null })
+              .eq('id', authUser.id);
+          } catch {
+            try {
+              await sb
+                .from('profiles')
+                .update({ subscription_tier: 'free' })
+                .eq('id', authUser.id);
+            } catch {}
+          }
         }
         return normalized;
       }
@@ -126,7 +142,8 @@ export async function getOrCreateProfileFromSupabaseUser(
       if (!insertErr && inserted) {
         return inserted as UserProfile;
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.message?.includes('deleted')) throw err;
       // Fall through to clean in-memory profile keyed by verified Supabase user.id
     }
   }
@@ -137,7 +154,6 @@ export async function getOrCreateProfileFromSupabaseUser(
   if (existingMem) {
     if (isAdmin && !existingMem.is_admin) {
       existingMem.is_admin = true;
-      existingMem.subscription_tier = 'pro';
     }
     const normalized = normalizeProStatus(existingMem);
     fallback.profiles.set(authUser.id, normalized);
@@ -152,7 +168,7 @@ export async function getOrCreateProfileFromSupabaseUser(
     avatar_url: avatarUrl,
     discord_id: null,
     discord_username: null,
-    subscription_tier: isAdmin ? 'pro' : 'free',
+    subscription_tier: 'free',
     pro_expires_at: null,
     is_admin: isAdmin,
     is_banned: false,
@@ -968,20 +984,64 @@ export async function exportUserData(userId: string): Promise<Record<string, unk
   };
 }
 
-export async function deleteUserAccount(userId: string): Promise<{ deletedAuth: boolean }> {
-  const sb = getSupabaseAdmin();
+export async function deleteUserAccount(
+  userId: string,
+  userToken?: string
+): Promise<{ deletedAuth: boolean }> {
+  const sbAdmin = getSupabaseAdmin();
+  const sbUser = userToken ? getSupabaseUserClient(userToken) : null;
+  const clientToUse = sbAdmin || sbUser;
   let deletedAuth = false;
 
-  if (sb) {
+  if (clientToUse) {
     try {
-      // Profiles cascades to user-owned tables when deleted; deleting auth.users cascades profiles too
-      const { error } = await sb.auth.admin.deleteUser(userId);
-      if (!error) deletedAuth = true;
+      // 1. Delete all user-owned rows across tables
+      await Promise.allSettled([
+        clientToUse.from('watchlists').delete().eq('user_id', userId),
+        clientToUse.from('price_alerts').delete().eq('user_id', userId),
+        clientToUse.from('user_news_follows').delete().eq('user_id', userId),
+        clientToUse.from('saved_news').delete().eq('user_id', userId),
+        clientToUse.from('ai_analyses').delete().eq('user_id', userId),
+        clientToUse.from('payment_requests').delete().eq('user_id', userId),
+      ]);
     } catch {
-      // ignore if service role key cannot delete auth user
+      // ignore
     }
+
+    // 2. Try calling RPC delete_user_account if defined in Supabase
     try {
-      await sb.from('profiles').delete().eq('id', userId);
+      if (sbUser) {
+        const { error: rpcErr } = await sbUser.rpc('delete_user_account');
+        if (!rpcErr) deletedAuth = true;
+      }
+    } catch {
+      // ignore
+    }
+
+    // 3. Admin deletion from auth.users if service role key is present
+    if (sbAdmin) {
+      try {
+        const { error: adminErr } = await sbAdmin.auth.admin.deleteUser(userId);
+        if (!adminErr) deletedAuth = true;
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Delete profile or mark permanently deleted/banned so they can never log in
+    try {
+      const { error: delErr } = await clientToUse.from('profiles').delete().eq('id', userId);
+      if (delErr) {
+        await clientToUse.from('profiles').update({
+          is_banned: true,
+          is_suspended: true,
+          full_name: 'Deleted User',
+          email: `deleted_${userId}@deleted.veyra`,
+          avatar_url: null,
+          subscription_tier: 'free',
+          pro_expires_at: null,
+        }).eq('id', userId);
+      }
     } catch {
       // ignore
     }

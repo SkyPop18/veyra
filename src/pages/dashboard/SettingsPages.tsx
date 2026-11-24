@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useVeyra } from '../../context/VeyraContext';
 import { apiRequest } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { isProSubscriptionActive } from '../../lib/core';
 import type { PaymentMethod, PaymentRequest, UserProfile } from '../../types/veyra';
 
@@ -121,10 +122,43 @@ export function GeneralSettingsPage() {
     if (deleteText.trim().toUpperCase() !== 'DELETE') return;
     setDeleting(true);
     try {
+      // 1. Delete all user data on server and attempt admin deletion
       await apiRequest('/api/auth/account', { method: 'DELETE' });
+
+      // 2. Invalidate credentials in Supabase Auth directly
+      if (supabase) {
+        try {
+          await supabase.rpc('delete_user_account');
+        } catch {
+          // ignore if rpc not defined
+        }
+        try {
+          // Randomize password so old credentials never log in again
+          await supabase.auth.updateUser({
+            password: crypto.randomUUID() + crypto.randomUUID() + crypto.randomUUID(),
+            data: { deleted: true },
+          });
+        } catch {
+          // ignore
+        }
+        try {
+          await supabase.auth.signOut({ scope: 'global' });
+        } catch {
+          // ignore
+        }
+      }
+
+      // 3. Clear local storage and tokens completely
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch {
+        // ignore
+      }
+
       await logout();
       notify('Your account and personal data have been permanently deleted.', 'info');
-      navigate('/', { replace: true });
+      navigate('/register', { replace: true });
     } catch {
       notify('Unable to delete account right now. Contact akshatbhopali@gmail.com.', 'error');
     } finally {
