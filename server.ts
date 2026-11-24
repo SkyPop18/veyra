@@ -336,40 +336,70 @@ export function createApiApp() {
     });
   });
 
-  app.post('/api/auth/instant-verify', async (req: AuthedRequest, res) => {
-    const ok = await resolveSupabaseAuth(req);
-    let userId = req.userProfile?.id;
-    let userEmail = req.userProfile?.email || req.sbSession?.user?.email;
-
-    if (!userEmail && req.body?.email) {
-      userEmail = String(req.body.email).trim().toLowerCase();
+  // Resend Sign-in / Verification Link with strict 30-second rate limit on server
+  app.post('/api/auth/resend-verification', async (req: Request, res: Response) => {
+    const ip = getClientIp(req);
+    const email = (typeof req.body?.email === 'string' ? req.body.email : '').trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Valid email address is required.' });
     }
 
-    if (!userId && !userEmail && !ok) {
-      return res.status(400).json({ error: 'Valid session or email required for verification.' });
-    }
-
-    const admin = getSupabaseAdmin();
-    if (admin && userId) {
-      try {
-        await admin.auth.admin.updateUserById(userId, { email_confirm: true });
-      } catch (err) {
-        console.warn('[Veyra Auth] Instant email verification via Supabase Admin API note:', err);
-      }
-    }
-
-    if (userId) {
-      await updateSafeProfile(userId, {
-        // Safe bypass flag in profile
-        ...({ email_verified: true } as any),
+    // 1. Strict 30s rate limit per IP
+    const ipLimit = checkRateLimit(`resend-verify-ip:${ip}`, 1, 30 * 1000);
+    if (!ipLimit.allowed) {
+      return res.status(429).json({
+        error: `Please wait ${ipLimit.retryAfterSec}s before requesting another verification link.`,
+        retryAfterSec: ipLimit.retryAfterSec,
       });
     }
 
-    if (req.sbSession) {
-      req.sbSession.emailVerified = true;
+    // 2. Strict 30s rate limit per Email
+    const emailLimit = checkRateLimit(`resend-verify-email:${email}`, 1, 30 * 1000);
+    if (!emailLimit.allowed) {
+      return res.status(429).json({
+        error: `Please wait ${emailLimit.retryAfterSec}s before requesting another verification link for this email.`,
+        retryAfterSec: emailLimit.retryAfterSec,
+      });
     }
 
-    return res.json({ ok: true, message: 'Email address verified successfully.' });
+    const sb = getSupabaseAdmin() || getSupabasePublic();
+    if (!sb) {
+      return res.status(503).json({ error: 'Authentication service is not configured.' });
+    }
+
+    try {
+      const emailRedirectTo = 'https://veyra-global.vercel.app/api/auth/callback';
+
+      // Attempt to resend signup confirmation email
+      const { error: resendErr } = await sb.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo },
+      });
+
+      if (resendErr) {
+        // If user already exists or confirmed, send magic sign-in link
+        const { error: otpErr } = await sb.auth.signInWithOtp({
+          email,
+          options: {
+            shouldCreateUser: false,
+            emailRedirectTo,
+          },
+        });
+        if (otpErr) {
+          return res.status(400).json({ error: otpErr.message || resendErr.message });
+        }
+      }
+
+      return res.json({
+        ok: true,
+        message: 'A verification link has been sent to your email inbox.',
+      });
+    } catch (err) {
+      return res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to send verification link.',
+      });
+    }
   });
 
   const acceptTermsSchema = z
@@ -902,9 +932,13 @@ export function createApiApp() {
   const adminBasePath = getAdminBasePath();
   if (adminBasePath) {
     const adminApiPrefix = `${adminBasePath}/api`;
+    const adminPaths = (subpath: string) => [
+      `${adminApiPrefix}${subpath}`,
+      `/api/admin${subpath}`,
+    ];
 
     // Admin session handshake / status check (rate limited 5 attempts / 15 min on failure)
-    app.post(`${adminApiPrefix}/session`, async (req: AuthedRequest, res) => {
+    app.post(adminPaths('/session'), async (req: AuthedRequest, res) => {
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
 
@@ -951,7 +985,7 @@ export function createApiApp() {
 
     // Re-authentication step-up before dangerous admin actions (verifies password with Supabase Auth)
     const reauthSchema = z.object({ password: z.string().min(10).max(128) }).strict();
-    app.post(`${adminApiPrefix}/reauth`, requireHiddenAdmin, async (req: AuthedRequest, res) => {
+    app.post(adminPaths('/reauth'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
       const ip = getClientIp(req);
       const rl = checkRateLimit(`admin-reauth:${ip}:${req.userProfile!.id}`, 5, 15 * 60 * 1000);
       if (!rl.allowed) {
@@ -979,17 +1013,17 @@ export function createApiApp() {
       return res.json({ ok: true });
     });
 
-    app.post(`${adminApiPrefix}/logout`, requireHiddenAdmin, async (req: AuthedRequest, res) => {
+    app.post(adminPaths('/logout'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
       clearAdminActivity(req.userProfile!.id);
       return res.json({ ok: true });
     });
 
-    app.get(`${adminApiPrefix}/overview`, requireHiddenAdmin, async (_req, res) => {
+    app.get(adminPaths('/overview'), requireHiddenAdmin, async (_req, res) => {
       const stats = await adminGetOverviewStats();
       res.json({ stats, apiHealth: getApiHealthStatuses() });
     });
 
-    app.get(`${adminApiPrefix}/users`, requireHiddenAdmin, async (_req, res) => {
+    app.get(adminPaths('/users'), requireHiddenAdmin, async (_req, res) => {
       const users = await adminListUsers();
       res.json({ users });
     });
@@ -1001,7 +1035,7 @@ export function createApiApp() {
       })
       .strict();
 
-    app.patch(`${adminApiPrefix}/users/:id`, requireHiddenAdmin, async (req: AuthedRequest, res) => {
+    app.patch(adminPaths('/users/:id'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
       if (!hasRecentAdminReauth(req.userProfile!.id)) {
         return res.status(428).json({
           error: 'Recent password re-authentication is required for this action.',
@@ -1033,7 +1067,7 @@ export function createApiApp() {
       return res.json({ user: updated });
     });
 
-    app.get(`${adminApiPrefix}/payments`, requireHiddenAdmin, async (_req, res) => {
+    app.get(adminPaths('/payments'), requireHiddenAdmin, async (_req, res) => {
       const payments = await adminListPayments();
       res.json({ payments });
     });
@@ -1045,7 +1079,7 @@ export function createApiApp() {
       })
       .strict();
 
-    app.patch(`${adminApiPrefix}/payments/:id`, requireHiddenAdmin, async (req: AuthedRequest, res) => {
+    app.patch(adminPaths('/payments/:id'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
       if (!hasRecentAdminReauth(req.userProfile!.id)) {
         return res.status(428).json({
           error: 'Recent password re-authentication is required before approving or rejecting payments.',
@@ -1081,7 +1115,7 @@ export function createApiApp() {
       return res.json(result);
     });
 
-    app.get(`${adminApiPrefix}/audit-log`, requireHiddenAdmin, async (_req, res) => {
+    app.get(adminPaths('/audit-log'), requireHiddenAdmin, async (_req, res) => {
       const logs = await adminListAuditLogs();
       res.json({ logs });
     });

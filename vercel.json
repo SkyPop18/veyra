@@ -22,6 +22,10 @@
       "destination": "/api"
     },
     {
+      "source": "/vx-(.*)/api/(.*)",
+      "destination": "/api"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

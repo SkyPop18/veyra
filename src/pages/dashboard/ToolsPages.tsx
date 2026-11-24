@@ -459,6 +459,43 @@ export function HeatmapPage() {
     setPan({ x: 0, y: 0 });
   };
 
+  const hoverTimerRef = useRef<number | null>(null);
+
+  const handleMouseEnterDot = (c: HeatmapCurrency, x: number, y: number) => {
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoveredCurrency({ currency: c, x, y });
+  };
+
+  const handleMouseLeaveDot = () => {
+    if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoveredCurrency(null);
+    }, 280);
+  };
+
+  const handleMouseEnterTooltip = () => {
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
+  const handleMouseLeaveTooltip = () => {
+    if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoveredCurrency(null);
+    }, 200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
   // Wheel zoom listener with non-passive event listener so it intercepts map scroll cleanly
   useEffect(() => {
     const el = mapContainerRef.current;
@@ -826,13 +863,16 @@ export function HeatmapPage() {
                       <g
                         key={`dot-${c.code}`}
                         className="cursor-pointer transition-all duration-150"
-                        onMouseEnter={() => setHoveredCurrency({ currency: c, x, y })}
-                        onMouseLeave={() => setHoveredCurrency(null)}
+                        onMouseEnter={() => handleMouseEnterDot(c, x, y)}
+                        onMouseLeave={handleMouseLeaveDot}
                         onClick={() => {
                           if (isDragMoved.current) return;
                           setSelectedCurrency(c);
                         }}
                       >
+                        {/* Generous invisible hit zone so hovering and clicking is effortless */}
+                        <circle cx={x} cy={y} r={18 * scaleFactor} fill="transparent" />
+
                         {/* Outer pulse for high strength or selected dot */}
                         {(c.strengthScore >= 75 || isSelected || isHovered) && (
                           <circle
@@ -929,7 +969,14 @@ export function HeatmapPage() {
 
                 return (
                   <div
-                    className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full mb-3 w-64 rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white/95 dark:bg-[#0c121e]/95 p-3.5 shadow-2xl backdrop-blur-md transition-all animate-in fade-in zoom-in-95 duration-150"
+                    className="pointer-events-auto absolute z-30 -translate-x-1/2 -translate-y-full mb-3 w-64 rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white/95 dark:bg-[#0c121e]/95 p-3.5 shadow-2xl backdrop-blur-md transition-all animate-in fade-in zoom-in-95 duration-150 cursor-pointer"
+                    onMouseEnter={handleMouseEnterTooltip}
+                    onMouseLeave={handleMouseLeaveTooltip}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedCurrency(hoveredCurrency.currency);
+                      setHoveredCurrency(null);
+                    }}
                     style={{
                       left: `${(transformedX / 1000) * 100}%`,
                       top: `${(transformedY / 500) * 100}%`,
@@ -981,7 +1028,17 @@ export function HeatmapPage() {
 
                     <div className="mt-2.5 pt-2 border-t border-[#e4e4e7] dark:border-white/10 flex items-center justify-between text-[11px] text-[#71717a] dark:text-[#a1a1aa]">
                       <span>{hoveredCurrency.currency.region}</span>
-                      <span className="text-[#3b82f6] font-medium">Click to inspect →</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCurrency(hoveredCurrency.currency);
+                          setHoveredCurrency(null);
+                        }}
+                        className="text-[#3b82f6] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        Click to inspect →
+                      </button>
                     </div>
                   </div>
                 );
@@ -1301,25 +1358,27 @@ export function AlertsPage() {
   const currentAsset = useMemo(() => {
     const sym = symbol.trim().toUpperCase();
     if (assetType === 'crypto') {
-      const c = crypto.find((x) => x.code.toUpperCase() === sym || x.id.toUpperCase() === sym);
+      const c = (crypto || []).find((x) => x?.code?.toUpperCase() === sym || x?.id?.toUpperCase() === sym);
       if (c) {
+        const p = typeof c.price_usd === 'number' ? c.price_usd : 0;
         return {
-          symbol: c.code,
-          name: c.name,
+          symbol: c.code || sym,
+          name: c.name || sym,
           type: 'crypto' as const,
-          price: c.price_usd,
-          formatted: `$${c.price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: c.price_usd < 1 ? 6 : 2 })}`,
+          price: p,
+          formatted: formatPrice(p),
         };
       }
     } else {
-      const f = fiat.find((x) => x.code.toUpperCase() === sym);
+      const f = (fiat || []).find((x) => x?.code?.toUpperCase() === sym);
       if (f) {
+        const rate = typeof f.vsUsdRate === 'number' ? f.vsUsdRate : 1;
         return {
-          symbol: f.code,
-          name: f.name,
+          symbol: f.code || sym,
+          name: f.name || sym,
           type: 'fiat' as const,
-          price: f.vsUsdRate,
-          formatted: `1 USD = ${f.vsUsdRate} ${f.code}`,
+          price: rate,
+          formatted: `1 USD = ${rate} ${f.code}`,
         };
       }
     }
@@ -1328,21 +1387,21 @@ export function AlertsPage() {
 
   const filteredAssets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const fiatList = fiat.map((f) => ({
+    const fiatList = (fiat || []).map((f) => ({
       symbol: f.code,
       name: f.name,
-      country: f.country,
+      country: f.country || '',
       type: 'fiat' as const,
-      price: f.vsUsdRate,
-      formattedPrice: `1 USD = ${f.vsUsdRate} ${f.code}`,
+      price: typeof f.vsUsdRate === 'number' ? f.vsUsdRate : 1,
+      formattedPrice: `1 USD = ${typeof f.vsUsdRate === 'number' ? f.vsUsdRate : 1} ${f.code}`,
     }));
-    const cryptoList = crypto.map((c) => ({
+    const cryptoList = (crypto || []).map((c) => ({
       symbol: c.code,
       name: c.name,
       country: '',
       type: 'crypto' as const,
-      price: c.price_usd,
-      formattedPrice: `$${c.price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: c.price_usd < 1 ? 6 : 2 })}`,
+      price: typeof c.price_usd === 'number' ? c.price_usd : 0,
+      formattedPrice: formatPrice(typeof c.price_usd === 'number' ? c.price_usd : 0),
     }));
 
     const combined = assetType === 'fiat' ? [...fiatList, ...cryptoList] : [...cryptoList, ...fiatList];
@@ -1544,7 +1603,7 @@ export function AlertsPage() {
       </form>
 
       <div className="glass-surface overflow-x-auto">
-        {alerts.length === 0 ? (
+        {(alerts || []).length === 0 ? (
           <div className="p-8 text-center text-sm text-[#71717a]">
             No price alerts configured yet. Add one above to monitor thresholds.
           </div>
@@ -1561,14 +1620,14 @@ export function AlertsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#e4e4e7]/70 dark:divide-white/5 text-sm">
-              {alerts.map((al) => (
+              {(alerts || []).map((al) => (
                 <tr key={al.id}>
                   <td className="py-3.5 px-4 font-semibold">
                     {al.symbol} <span className="text-xs font-normal text-[#71717a] uppercase">{al.asset_type}</span>
                   </td>
                   <td className="py-3.5 px-4 capitalize text-xs">{al.direction}</td>
                   <td className="py-3.5 px-4 text-right font-mono-num">
-                    {al.asset_type === 'crypto' ? formatPrice(al.target_price) : al.target_price}
+                    {al.asset_type === 'crypto' ? formatPrice(Number(al.target_price) || 0) : al.target_price}
                   </td>
                   <td className="py-3.5 px-4 text-xs text-[#71717a]">
                     {al.notify_discord ? 'In-App + Discord' : 'In-App'}

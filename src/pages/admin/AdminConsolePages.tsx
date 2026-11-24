@@ -46,7 +46,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const apiPrefix = `${basePath}/api`;
+  const apiPrefix = '/api/admin';
 
   const [checking, setChecking] = useState(true);
   const [authorized, setAuthorized] = useState(false);
@@ -475,7 +475,14 @@ export function AdminOverviewPage() {
     void apiRequest<typeof data>(`${apiPrefix}/overview`).then(setData).catch(() => {});
   }, [apiPrefix]);
 
-  if (!data) return <div className="text-sm text-[#71717a]">Loading overview...</div>;
+  if (!data?.stats) {
+    return (
+      <div className="p-8 text-center text-sm text-[#71717a] flex items-center justify-center gap-2">
+        <Activity className="h-4 w-4 animate-spin text-[#3b82f6]" />
+        <span>Loading platform overview...</span>
+      </div>
+    );
+  }
 
   const cards = [
     { label: 'Total Users', value: data.stats.totalUsers },
@@ -509,8 +516,12 @@ export function AdminUsersPage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
 
   const load = useCallback(async () => {
-    const res = await apiRequest<{ users: UserProfile[] }>(`${apiPrefix}/users`);
-    setUsers(res.users);
+    try {
+      const res = await apiRequest<{ users: UserProfile[] }>(`${apiPrefix}/users`);
+      setUsers(Array.isArray(res?.users) ? res.users : []);
+    } catch {
+      setUsers([]);
+    }
   }, [apiPrefix]);
 
   useEffect(() => {
@@ -646,12 +657,12 @@ export function AdminPaymentsPage() {
       <h1 className="font-display text-2xl font-bold">Manual Payment Verification Queue</h1>
 
       <div className="space-y-4">
-        {payments.length === 0 ? (
+        {(payments || []).length === 0 ? (
           <div className="glass-surface p-8 text-center text-sm text-[#71717a]">
             No payment verification requests submitted yet.
           </div>
         ) : (
-          payments.map((p) => (
+          (payments || []).map((p) => (
             <div key={p.id} className="glass-surface p-5 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -718,8 +729,8 @@ export function AdminApiHealthPage() {
 
   useEffect(() => {
     void apiRequest<{ apiHealth: ApiConfigHealth[] }>(`${apiPrefix}/overview`)
-      .then((res) => setHealth(res.apiHealth))
-      .catch(() => {});
+      .then((res) => setHealth(Array.isArray(res?.apiHealth) ? res.apiHealth : []))
+      .catch(() => setHealth([]));
   }, [apiPrefix]);
 
   return (
@@ -775,8 +786,8 @@ export function AdminAuditLogPage() {
 
   useEffect(() => {
     void apiRequest<{ logs: AdminAuditEntry[] }>(`${apiPrefix}/audit-log`)
-      .then((res) => setLogs(res.logs))
-      .catch(() => {});
+      .then((res) => setLogs(Array.isArray(res?.logs) ? res.logs : []))
+      .catch(() => setLogs([]));
   }, [apiPrefix]);
 
   return (

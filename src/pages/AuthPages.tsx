@@ -759,122 +759,55 @@ export function RegisterPage() {
   );
 }
 
-// ── 3. Verify Email (6-Digit Supabase OTP) ────────────────────────────────────
+// ── 3. Verify Email (Direct Magic Link with 30s Server Rate Limit) ─────────────
 
 export function VerifyEmailPage() {
   const [params] = useSearchParams();
   const initialEmail = params.get('email') || '';
-  const mode = params.get('mode') === 'email' ? 'email' : 'signup';
-  const preConsented = params.get('consented') === '1';
-
-  const { refreshAuth, notify } = useVeyra();
-  const navigate = useNavigate();
+  const { notify } = useVeyra();
 
   const [email, setEmail] = useState(initialEmail);
-  const [code, setCode] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
-  const [instantLoading, setInstantLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [cooldown, setCooldown] = useState(0);
 
-  const handleVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supabase) {
-      setError('Supabase Auth is not configured.');
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setInterval(() => {
+      setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [cooldown]);
+
+  const handleResendLink = async () => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setError('Please provide a valid email address.');
       return;
     }
+    if (cooldown > 0) return;
+
     setError('');
-    setLoading(true);
-    try {
-      const cleanEmail = email.trim().toLowerCase();
-      const token = code.trim();
-      let res = await supabase.auth.verifyOtp({
-        email: cleanEmail,
-        token,
-        type: mode,
-      });
-
-      // If signup mode failed, attempt email mode fallback
-      if (res.error) {
-        res = await supabase.auth.verifyOtp({
-          email: cleanEmail,
-          token,
-          type: mode === 'signup' ? 'email' : 'signup',
-        });
-      }
-
-      if (res.error) {
-        setError(res.error.message || 'Invalid or expired verification code.');
-        return;
-      }
-
-      if (preConsented) {
-        try {
-          await apiRequest('/api/auth/accept-terms', {
-            method: 'POST',
-            body: { accepted: true, version: CURRENT_TERMS_VERSION },
-          });
-        } catch {
-          // Consent gate will prompt if not recorded
-        }
-      }
-
-      await refreshAuth();
-      notify('Email verified. Welcome to Veyra!', 'success');
-      navigate('/dashboard/home', { replace: true });
-    } catch {
-      setError('Verification failed. Please request a new code or verify instantly.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleInstantVerify = async () => {
-    setInstantLoading(true);
-    setError('');
-    try {
-      await apiRequest('/api/auth/instant-verify', {
-        method: 'POST',
-        body: { email: email.trim().toLowerCase() },
-      });
-
-      if (preConsented) {
-        try {
-          await apiRequest('/api/auth/accept-terms', {
-            method: 'POST',
-            body: { accepted: true, version: CURRENT_TERMS_VERSION },
-          });
-        } catch {
-          // Handled by consent gate
-        }
-      }
-
-      await refreshAuth();
-      notify('Email verified successfully! Welcome to Veyra.', 'success');
-      navigate('/dashboard/home', { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Instant verification could not be completed.');
-    } finally {
-      setInstantLoading(false);
-    }
-  };
-
-  const handleResend = async () => {
-    if (!supabase || !email.trim()) return;
+    setMessage('');
     setResending(true);
+
     try {
-      const cleanEmail = email.trim().toLowerCase();
-      await Promise.allSettled([
-        supabase.auth.resend({
-          type: 'signup',
-          email: cleanEmail,
-        }),
-        supabase.auth.signInWithOtp({
-          email: cleanEmail,
-          options: { shouldCreateUser: false },
-        }),
-      ]);
-      notify('A new 6-digit verification code has been dispatched.', 'info');
+      const res = await apiRequest<{ ok: boolean; message?: string }>('/api/auth/resend-verification', {
+        method: 'POST',
+        body: { email: cleanEmail },
+      });
+      setMessage(res.message || 'A new confirmation link has been sent to your inbox.');
+      notify('Verification link dispatched.', 'success');
+      setCooldown(30);
+    } catch (err: any) {
+      const retry = Number(err?.data?.retryAfterSec);
+      if (Number.isFinite(retry) && retry > 0) {
+        setCooldown(retry);
+      } else {
+        setCooldown(30);
+      }
+      setError(err instanceof Error ? err.message : 'Unable to send link. Please wait before trying again.');
     } finally {
       setResending(false);
     }
@@ -882,75 +815,69 @@ export function VerifyEmailPage() {
 
   return (
     <AuthLayout
-      title="Verify your email"
-      subtitle="Enter the 6-digit verification code sent to your inbox."
+      title="Check your inbox"
+      subtitle="We've sent a secure verification link to your email."
     >
-      <form onSubmit={handleVerify} className="space-y-4">
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#12161f] p-5 text-center space-y-3">
+          <div className="h-12 w-12 rounded-2xl bg-[#3b82f6]/10 text-[#3b82f6] flex items-center justify-center mx-auto shadow-inner">
+            <Mail className="h-6 w-6" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs text-[#71717a] dark:text-[#a1a1aa]">Confirmation link dispatched to</p>
+            <p className="text-sm font-bold text-[#09090b] dark:text-white break-all">{email || 'your email'}</p>
+          </div>
+          <p className="text-xs text-[#52525b] dark:text-[#a1a1aa] leading-relaxed pt-1">
+            Click the link inside the email to immediately confirm your account and open your Veyra dashboard. You can close this window once clicked.
+          </p>
+        </div>
+
         <div className="space-y-1.5">
-          <label htmlFor="otp-verify-email" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            Email Address
+          <label htmlFor="resend-email" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+            Didn't receive it? Confirm your email address:
           </label>
           <input
-            id="otp-verify-email"
+            id="resend-email"
             type="email"
-            required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
             className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
           />
         </div>
 
-        <div className="space-y-1.5">
-          <label htmlFor="otp-code" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            6-Digit Verification Code
-          </label>
-          <div className="relative">
-            <KeyRound className="h-4 w-4 text-[#71717a] absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              id="otp-code"
-              type="text"
-              inputMode="numeric"
-              pattern="\d{6}"
-              maxLength={6}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="000000"
-              className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] pl-10 pr-3.5 py-2.5 font-mono-num text-lg tracking-[0.35em] focus:outline-none focus:border-[#3b82f6]"
-            />
+        {message && (
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{message}</span>
           </div>
-        </div>
+        )}
 
-        {error && <p role="alert" className="text-xs font-medium text-[#ef4444]">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs font-medium text-[#ef4444] text-center">
+            {error}
+          </p>
+        )}
 
         <button
-          type="submit"
-          disabled={loading || code.length !== 6}
-          className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white font-medium text-sm py-2.5 transition-colors cursor-pointer disabled:opacity-50"
+          type="button"
+          onClick={handleResendLink}
+          disabled={resending || cooldown > 0 || !email.trim()}
+          className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold text-sm py-2.5 transition-colors cursor-pointer disabled:opacity-50"
         >
-          {loading ? 'Verifying...' : 'Verify & Continue'}
+          {resending ? 'Sending link...' : cooldown > 0 ? `Resend link in ${cooldown}s` : 'Resend verification link'}
         </button>
 
-        <div className="pt-2 border-t border-[#e4e4e7] dark:border-white/10 space-y-2">
-          <button
-            type="button"
-            onClick={handleInstantVerify}
-            disabled={instantLoading}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-medium text-xs py-2.5 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <ShieldCheck className="h-4 w-4" />
-            <span>{instantLoading ? 'Verifying...' : 'Didn’t get code? Verify Instantly & Enter Dashboard'}</span>
-          </button>
+        <p className="text-[11px] text-[#71717a] text-center">
+          Server enforced 30s rate limit applies. Remember to check your Spam or Promotions folder.
+        </p>
 
-          <button
-            type="button"
-            onClick={handleResend}
-            disabled={resending || !email.trim()}
-            className="w-full text-xs font-medium text-[#3b82f6] hover:underline py-1 cursor-pointer disabled:opacity-50 text-center block"
-          >
-            {resending ? 'Sending...' : 'Resend verification code'}
-          </button>
+        <div className="pt-2 border-t border-[#e4e4e7] dark:border-white/10 text-center">
+          <Link to="/login" className="text-xs font-medium text-[#3b82f6] hover:underline">
+            ← Return to sign in
+          </Link>
         </div>
-      </form>
+      </div>
     </AuthLayout>
   );
 }

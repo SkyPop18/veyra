@@ -59,7 +59,15 @@ export async function apiRequest<T>(
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
-  const text = await res.text();
+  const text = (await res.text()).trim();
+  const isHtml = text.startsWith('<!doctype') || text.startsWith('<!DOCTYPE') || text.startsWith('<html');
+  if (isHtml) {
+    throw new ApiError(
+      `Endpoint ${path} returned an HTML document instead of JSON. The route may not be available.`,
+      res.ok ? 404 : res.status
+    );
+  }
+
   let json: Record<string, unknown> = {};
   try {
     json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
