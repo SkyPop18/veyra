@@ -4,7 +4,6 @@ import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { createServer as createViteServer } from 'vite';
 import {
   buildStrengthLeaderboard,
   fetchAggregatedNews,
@@ -204,12 +203,20 @@ async function requireHiddenAdmin(
   return next();
 }
 
-export async function createApp() {
+export function createApiApp() {
   const app = express();
   app.set('trust proxy', 1);
   app.use(securityHeadersMiddleware);
   app.use(express.json({ limit: '512kb' }));
   app.use(cookieParser());
+
+  // Normalize incoming URLs so API routes match even if an edge rewrite stripped the /api prefix
+  app.use((req, _res, next) => {
+    if (!req.url.startsWith('/api') && !req.url.startsWith('/.well-known')) {
+      req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+    }
+    next();
+  });
 
   // ── Standard Security Contact (/.well-known/security.txt) ──────────────────
   app.get('/.well-known/security.txt', (_req, res) => {
@@ -1008,11 +1015,18 @@ export async function createApp() {
     }
   });
 
+  return app;
+}
+
+export async function createApp() {
+  const app = createApiApp();
+
   // ── Vite Dev Middleware / Production Static Assets + Hidden Admin HTML Gate ─
   const isProd = process.env.NODE_ENV === 'production';
 
   const renderHtmlWithGuards = (req: Request, res: Response, rawHtml: string) => {
     const pathname = req.path;
+    const adminBasePath = getAdminBasePath();
 
     // 1. /admin and /admin/* ALWAYS return HTTP 404 (never redirect, never reveal admin)
     if (pathname === '/admin' || pathname.startsWith('/admin/')) {
@@ -1049,6 +1063,7 @@ export async function createApp() {
   };
 
   if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: 'custom',
@@ -1088,7 +1103,11 @@ export async function createApp() {
 }
 
 const PORT = Number(process.env.PORT || 3000);
-if (!process.env.VERCEL) {
+const isMainModule =
+  process.argv[1] &&
+  (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js'));
+
+if (isMainModule && !process.env.VERCEL) {
   createApp()
     .then((app) => {
       app.listen(PORT, '0.0.0.0', () => {
