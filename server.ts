@@ -54,13 +54,16 @@ import {
 import {
   checkRateLimit,
   clearAdminActivity,
+  clearAdminCookies,
   getAdminBasePath,
   getClientIp,
+  getExpectedBotApiToken,
   hasRecentAdminReauth,
   isEmailInAdminAllowlist,
   isIpAllowedForAdmin,
   recordAdminReauth,
   securityHeadersMiddleware,
+  setAdminReauthCookie,
   startAdminActivity,
   timingSafeEqualStr,
   touchAdminActivity,
@@ -102,7 +105,7 @@ async function resolveSupabaseAuth(req: AuthedRequest): Promise<boolean> {
   if (!token) return false;
   const session = await verifySupabaseJwt(token);
   if (!session) return false;
-  const profile = await getOrCreateProfileFromSupabaseUser(session.user);
+  const profile = await getOrCreateProfileFromSupabaseUser(session.user, session.token);
   req.sbSession = session;
   req.userProfile = profile;
   return true;
@@ -420,7 +423,7 @@ export function createApiApp() {
     if (parsed.data.version !== CURRENT_TERMS_VERSION) {
       return res.status(400).json({ error: 'Terms version mismatch. Please reload and accept the latest terms.' });
     }
-    const updated = await recordTermsConsent(req.userProfile!.id, CURRENT_TERMS_VERSION);
+    const updated = await recordTermsConsent(req.userProfile!.id, CURRENT_TERMS_VERSION, req.sbSession?.token);
     return res.json({ user: updated, termsAccepted: true });
   });
 
@@ -448,7 +451,7 @@ export function createApiApp() {
     const updated = await updateSafeProfile(req.userProfile!.id, {
       full_name: parsed.data.full_name,
       avatar_url: safeAvatar === '#' ? null : safeAvatar,
-    });
+    }, req.sbSession?.token);
     return res.json({ user: updated });
   });
 
@@ -467,7 +470,7 @@ export function createApiApp() {
     const updated = await updateSafeProfile(req.userProfile!.id, {
       discord_id: parsed.data.discord_id,
       discord_username: parsed.data.discord_username,
-    });
+    }, req.sbSession?.token);
     return res.json({ user: updated });
   });
 
@@ -475,7 +478,7 @@ export function createApiApp() {
     const updated = await updateSafeProfile(req.userProfile!.id, {
       discord_id: null,
       discord_username: null,
-    });
+    }, req.sbSession?.token);
     return res.json({ user: updated });
   });
 
@@ -743,7 +746,7 @@ export function createApiApp() {
   // ── Manual Payment Requests ────────────────────────────────────────────────
 
   app.get('/api/user/payment-requests', requireConsentedUser, async (req: AuthedRequest, res) => {
-    const items = await listUserPaymentRequests(req.userProfile!.id);
+    const items = await listUserPaymentRequests(req.userProfile!.id, req.sbSession?.token);
     res.json({ items });
   });
 
@@ -768,11 +771,12 @@ export function createApiApp() {
       payment_method: parsed.data.payment_method,
       transaction_id: parsed.data.transaction_id,
       payment_proof_url: safeProof === '#' ? null : safeProof,
-    });
+    }, req.sbSession?.token);
     return res.status(201).json({ item });
   });
 
   // ── Gemini AI Analysis (5 msgs / 2 days for Free, Unlimited for Pro) ───────
+  const activeAiUsers = new Set<string>();
 
   app.get('/api/ai/usage', requireConsentedUser, async (req: AuthedRequest, res) => {
     const isPro = isProSubscriptionActive(req.userProfile);
@@ -792,9 +796,14 @@ export function createApiApp() {
     .strict();
 
   app.post('/api/ai/analyze', requireConsentedUser, async (req: AuthedRequest, res) => {
+    const uid = req.userProfile!.id;
+    if (activeAiUsers.has(uid)) {
+      return res.status(429).json({ error: 'An analysis is already in progress. Please wait for it to finish.' });
+    }
+    activeAiUsers.add(uid);
     try {
       const isPro = isProSubscriptionActive(req.userProfile);
-      const usage = await getAiUsage(req.userProfile!.id, isPro, req.sbSession?.token);
+      const usage = await getAiUsage(uid, isPro, req.sbSession?.token);
 
       if (!usage.allowed) {
         return res.status(429).json({
@@ -891,21 +900,42 @@ export function createApiApp() {
       }
       res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
       res.end();
+    } finally {
+      activeAiUsers.delete(uid);
     }
   });
 
-  // ── Discord Bot Endpoints ──────────────────────────────────────────────────
-  app.get('/api/bot/watchlist/:discordId', async (req, res) => {
-    const discordId = req.params.discordId;
+  // ── Discord Bot Endpoints (authenticated via bot bearer secret + rate limited) ─
+  function requireDiscordBotAuth(req: Request, res: Response, next: NextFunction) {
+    const expected = getExpectedBotApiToken();
+    const provided = extractBearerToken(req);
+    if (!expected || !provided || !timingSafeEqualStr(provided, expected)) {
+      return res.status(401).json({ error: 'Unauthorized bot request.' });
+    }
+    return next();
+  }
+
+  app.get('/api/bot/watchlist/:discordId', requireDiscordBotAuth, async (req, res) => {
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`bot-wl:${ip}`, 60, 60 * 1000);
+    if (!rl.allowed) return res.status(429).json({ error: 'Bot rate limit exceeded.' });
+
+    const discordId = String(req.params.discordId || '');
+    if (!/^\d{17,20}$/.test(discordId)) {
+      return res.status(400).json({ error: 'Invalid Discord user ID.' });
+    }
     const profile = await getProfileByDiscordId(discordId);
     if (!profile) {
       return res.status(404).json({ error: 'No linked Veyra account found for this Discord user.' });
     }
     const items = await listWatchlist(profile.id);
-    return res.json({ profile: { id: profile.id, email: profile.email, full_name: profile.full_name }, items });
+    return res.json({ profile: { id: profile.id, full_name: profile.full_name }, items });
   });
 
-  app.post('/api/bot/analyze', async (req, res) => {
+  app.post('/api/bot/analyze', requireDiscordBotAuth, async (req, res) => {
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`bot-ai:${ip}`, 30, 60 * 1000);
+    if (!rl.allowed) return res.status(429).json({ error: 'Bot rate limit exceeded.' });
     const symbol = String(req.body?.symbol || '').trim().toUpperCase();
     if (!symbol || symbol.length > 10) {
       return res.status(400).json({ error: 'Valid symbol required (e.g. INR, USD, BTC).' });
@@ -993,6 +1023,9 @@ export function createApiApp() {
       }
 
       startAdminActivity(req.userProfile.id);
+      const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
+      setAdminReauthCookie(res, req.userProfile.id, isHttps);
+
       await recordAdminAudit({
         admin_id: req.userProfile.id,
         action: 'admin_login',
@@ -1001,6 +1034,7 @@ export function createApiApp() {
         details: { aal: req.sbSession.aal },
         ip_address: ip,
         user_agent: String(req.headers['user-agent'] || '').slice(0, 240) || null,
+        userToken: req.sbSession.token,
       });
 
       return res.json({ ok: true, admin: { email: req.userProfile.email, aal: req.sbSession.aal } });
@@ -1033,11 +1067,14 @@ export function createApiApp() {
       }
 
       recordAdminReauth(req.userProfile!.id);
+      const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
+      setAdminReauthCookie(res, req.userProfile!.id, isHttps);
       return res.json({ ok: true });
     });
 
     app.post(adminPaths('/logout'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
       clearAdminActivity(req.userProfile!.id);
+      clearAdminCookies(res);
       return res.json({ ok: true });
     });
 
@@ -1059,7 +1096,7 @@ export function createApiApp() {
       .strict();
 
     app.patch(adminPaths('/users/:id'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
-      if (!hasRecentAdminReauth(req.userProfile!.id)) {
+      if (!hasRecentAdminReauth(req.userProfile!.id, req)) {
         return res.status(428).json({
           error: 'Recent password re-authentication is required for this action.',
           code: 'REAUTH_REQUIRED',
@@ -1071,25 +1108,29 @@ export function createApiApp() {
         return res.status(400).json({ error: 'Invalid user management action.' });
       }
       const targetId = String(req.params.id);
-      const updated = await adminManageUser({
+      const result = await adminManageUser({
         targetUserId: targetId,
         action: parsed.data.action,
         userToken: req.sbSession?.token,
       });
-      if (!updated) return res.status(404).json({ error: 'User not found.' });
+      if (!result.user) {
+        return res.status(result.errorMessage ? 403 : 404).json({
+          error: result.errorMessage || 'User not found.',
+        });
+      }
 
       await recordAdminAudit({
         admin_id: req.userProfile!.id,
         action: parsed.data.action,
         target_type: 'user',
         target_id: targetId,
-        details: { email: updated.email },
+        details: { email: result.user.email },
         ip_address: getClientIp(req),
         user_agent: String(req.headers['user-agent'] || '').slice(0, 240) || null,
         userToken: req.sbSession?.token,
       });
 
-      return res.json({ user: updated });
+      return res.json({ user: result.user });
     });
 
     app.get(adminPaths('/payments'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
@@ -1105,7 +1146,7 @@ export function createApiApp() {
       .strict();
 
     app.patch(adminPaths('/payments/:id'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
-      if (!hasRecentAdminReauth(req.userProfile!.id)) {
+      if (!hasRecentAdminReauth(req.userProfile!.id, req)) {
         return res.status(428).json({
           error: 'Recent password re-authentication is required before approving or rejecting payments.',
           code: 'REAUTH_REQUIRED',
@@ -1123,6 +1164,7 @@ export function createApiApp() {
         userToken: req.sbSession?.token,
       });
       if (!result) return res.status(404).json({ error: 'Payment request not found.' });
+      if (result.errorMessage) return res.status(403).json({ error: result.errorMessage });
 
       await recordAdminAudit({
         admin_id: req.userProfile!.id,

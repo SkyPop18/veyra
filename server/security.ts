@@ -7,6 +7,63 @@ const adminReauthMap = new Map<string, number>();
 
 const ADMIN_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const ADMIN_REAUTH_WINDOW_MS = 10 * 60 * 1000; // 10 minutes for dangerous actions
+const EPHEMERAL_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
+
+function getAdminSigningSecret(): string {
+  const configured =
+    (process.env.ADMIN_SESSION_SECRET || '').trim() ||
+    (process.env.ADMIN_SECRET_KEY || '').trim() ||
+    (process.env.CRON_SECRET || '').trim();
+  return configured || EPHEMERAL_FALLBACK_SECRET;
+}
+
+export function getExpectedBotApiToken(): string | null {
+  const explicit = (process.env.DISCORD_BOT_API_SECRET || '').trim();
+  if (explicit) return explicit;
+  const botToken = (process.env.DISCORD_BOT_TOKEN || '').trim();
+  if (!botToken) return null;
+  return crypto.createHash('sha256').update(`veyra-bot:${botToken}`).digest('hex');
+}
+
+export function verifySignedAdminToken(token: string | undefined, expectedUserId: string, purpose: 'session' | 'reauth'): boolean {
+  if (!token || !expectedUserId) return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  const [uid, expStr, sig] = parts;
+  if (uid !== expectedUserId) return false;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || Date.now() > exp) return false;
+
+  const expectedSig = crypto
+    .createHmac('sha256', getAdminSigningSecret())
+    .update(`${purpose}:${uid}:${expStr}`)
+    .digest('hex');
+  return timingSafeEqualStr(sig, expectedSig);
+}
+
+export function createSignedAdminToken(userId: string, purpose: 'session' | 'reauth', ttlMs: number): string {
+  const expStr = String(Date.now() + ttlMs);
+  const sig = crypto
+    .createHmac('sha256', getAdminSigningSecret())
+    .update(`${purpose}:${userId}:${expStr}`)
+    .digest('hex');
+  return `${userId}.${expStr}.${sig}`;
+}
+
+export function setAdminReauthCookie(res: Response, userId: string, isSecure: boolean) {
+  const token = createSignedAdminToken(userId, 'reauth', ADMIN_REAUTH_WINDOW_MS);
+  res.cookie('veyra_admin_reauth', token, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: isSecure,
+    maxAge: ADMIN_REAUTH_WINDOW_MS,
+    path: '/',
+  });
+}
+
+export function clearAdminCookies(res: Response) {
+  res.clearCookie('veyra_admin_reauth', { path: '/' });
+}
 
 export function checkRateLimit(
   key: string,
@@ -105,7 +162,11 @@ export function recordAdminReauth(userId: string) {
   adminActivityMap.set(userId, Date.now());
 }
 
-export function hasRecentAdminReauth(userId: string): boolean {
+export function hasRecentAdminReauth(userId: string, req?: Request): boolean {
+  const cookieToken = req?.cookies?.veyra_admin_reauth;
+  if (typeof cookieToken === 'string' && verifySignedAdminToken(cookieToken, userId, 'reauth')) {
+    return true;
+  }
   const ts = adminReauthMap.get(userId);
   if (!ts) return false;
   return Date.now() - ts <= ADMIN_REAUTH_WINDOW_MS;

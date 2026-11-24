@@ -1,15 +1,18 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity,
   Check,
   CreditCard,
+  Crown,
   FileCheck2,
   KeyRound,
   LayoutDashboard,
   Lock,
   LogOut,
   MessageSquare,
+  RefreshCw,
+  Search,
   ShieldAlert,
   ShieldCheck,
   Users,
@@ -27,10 +30,33 @@ import type {
   UserProfile,
 } from '../../types/veyra';
 
+interface OverviewStats {
+  totalUsers: number;
+  proUsers: number;
+  pendingPayments: number;
+  approvedRevenueInr: number;
+  activeWatchlistItems: number;
+  activeAlerts: number;
+  aiQueriesCount: number;
+  dbMode: string;
+}
+
+type PaymentWithOwner = PaymentRequest & { user_email: string; user_name: string };
+
 interface HiddenAdminCtxValue {
   basePath: string;
   apiPrefix: string;
   requestReauth: (onConfirmed: () => Promise<void>) => void;
+  overview: { stats: OverviewStats; apiHealth: ApiConfigHealth[] } | null;
+  users: UserProfile[];
+  payments: PaymentWithOwner[];
+  logs: AdminAuditEntry[];
+  loadingData: boolean;
+  refreshOverview: () => Promise<void>;
+  refreshUsers: () => Promise<void>;
+  refreshPayments: () => Promise<void>;
+  refreshLogs: () => Promise<void>;
+  setUsersDirect: React.Dispatch<React.SetStateAction<UserProfile[]>>;
 }
 
 const HiddenAdminCtx = createContext<HiddenAdminCtxValue | null>(null);
@@ -40,6 +66,9 @@ function useHiddenAdmin() {
   if (!ctx) throw new Error('useHiddenAdmin must be used inside AdminShell');
   return ctx;
 }
+
+const ADMIN_SURFACE =
+  'bg-white dark:bg-[#11131a] border border-[#e4e4e7] dark:border-white/10 rounded-2xl';
 
 export function AdminShell({ basePath }: { basePath: string }) {
   const { notify, refreshAuth } = useVeyra();
@@ -51,7 +80,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const [checking, setChecking] = useState(true);
   const [authorized, setAuthorized] = useState(false);
 
-  // Separate admin login + Supabase TOTP MFA (AAL2) flow
+  // Separate admin login + TOTP MFA (AAL2) flow
   const [step, setStep] = useState<'login' | 'mfa-verify' | 'mfa-enroll'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -62,23 +91,74 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const [authError, setAuthError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Preloaded console state for instant zero-lag tab switching
+  const [overview, setOverview] = useState<{ stats: OverviewStats; apiHealth: ApiConfigHealth[] } | null>(null);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [payments, setPayments] = useState<PaymentWithOwner[]>([]);
+  const [logs, setLogs] = useState<AdminAuditEntry[]>([]);
+  const [loadingData, setLoadingData] = useState(false);
+
   // Re-authentication modal for dangerous actions
   const [reauthPendingFn, setReauthPendingFn] = useState<(() => Promise<void>) | null>(null);
   const [reauthPassword, setReauthPassword] = useState('');
   const [reauthError, setReauthError] = useState('');
   const [reauthBusy, setReauthBusy] = useState(false);
 
+  const refreshOverview = useCallback(async () => {
+    try {
+      const res = await apiRequest<{ stats: OverviewStats; apiHealth: ApiConfigHealth[] }>(`${apiPrefix}/overview`);
+      if (res?.stats) setOverview(res);
+    } catch {
+      // handled by shell check
+    }
+  }, [apiPrefix]);
+
+  const refreshUsers = useCallback(async () => {
+    try {
+      const res = await apiRequest<{ users: UserProfile[] }>(`${apiPrefix}/users`);
+      setUsers(Array.isArray(res?.users) ? res.users : []);
+    } catch {
+      // preserve last list on transient failure
+    }
+  }, [apiPrefix]);
+
+  const refreshPayments = useCallback(async () => {
+    try {
+      const res = await apiRequest<{ payments: PaymentWithOwner[] }>(`${apiPrefix}/payments`);
+      setPayments(Array.isArray(res?.payments) ? res.payments : []);
+    } catch {
+      // preserve last list
+    }
+  }, [apiPrefix]);
+
+  const refreshLogs = useCallback(async () => {
+    try {
+      const res = await apiRequest<{ logs: AdminAuditEntry[] }>(`${apiPrefix}/audit-log`);
+      setLogs(Array.isArray(res?.logs) ? res.logs : []);
+    } catch {
+      // preserve last list
+    }
+  }, [apiPrefix]);
+
+  const preloadConsoleData = useCallback(async () => {
+    setLoadingData(true);
+    await Promise.allSettled([refreshOverview(), refreshUsers(), refreshPayments(), refreshLogs()]);
+    setLoadingData(false);
+  }, [refreshOverview, refreshUsers, refreshPayments, refreshLogs]);
+
   const verifyServerAdminSession = useCallback(async () => {
     setChecking(true);
     try {
-      await apiRequest(`${apiPrefix}/overview`);
+      const res = await apiRequest<{ stats: OverviewStats; apiHealth: ApiConfigHealth[] }>(`${apiPrefix}/overview`);
+      if (res?.stats) setOverview(res);
       setAuthorized(true);
+      void preloadConsoleData();
     } catch {
       setAuthorized(false);
     } finally {
       setChecking(false);
     }
-  }, [apiPrefix]);
+  }, [apiPrefix, preloadConsoleData]);
 
   useEffect(() => {
     void verifyServerAdminSession();
@@ -86,14 +166,15 @@ export function AdminShell({ basePath }: { basePath: string }) {
 
   const beginMfaCheck = async () => {
     if (!supabase) {
-      setAuthError('Supabase client is not configured.');
+      setAuthError('Authentication client is not configured.');
       return;
     }
     const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (aalData?.currentLevel === 'aal2') {
       await apiRequest(`${apiPrefix}/session`, { method: 'POST' });
       setAuthorized(true);
-      notify('Authenticated to hidden operations console (AAL2).', 'success');
+      void preloadConsoleData();
+      notify('Authenticated to operations console (AAL2).', 'success');
       return;
     }
 
@@ -105,7 +186,6 @@ export function AdminShell({ basePath }: { basePath: string }) {
       return;
     }
 
-    // Enroll a new TOTP factor for first-time admin MFA setup
     const { data: enrolled, error: enrollErr } = await supabase.auth.mfa.enroll({
       factorType: 'totp',
       friendlyName: 'Veyra Admin Authenticator',
@@ -123,7 +203,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
   const handleAdminPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabase) {
-      setAuthError('Supabase Auth is not configured.');
+      setAuthError('Authentication service is not configured.');
       return;
     }
     setAuthError('');
@@ -170,6 +250,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
       await apiRequest(`${apiPrefix}/session`, { method: 'POST' });
       setAuthorized(true);
       setTotpCode('');
+      void preloadConsoleData();
       notify('MFA verified (AAL2). Operations console unlocked.', 'success');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Server rejected admin session.');
@@ -210,12 +291,14 @@ export function AdminShell({ basePath }: { basePath: string }) {
         method: 'POST',
         body: { password: reauthPassword },
       });
-      const fn = reauthPendingFn;
+      await reauthPendingFn();
+      // Only close modal AFTER the privileged action itself completes cleanly
       setReauthPendingFn(null);
       setReauthPassword('');
-      await fn();
     } catch (err) {
-      setReauthError(err instanceof Error ? err.message : 'Password re-authentication failed.');
+      const msg = err instanceof Error ? err.message : 'Action could not be completed.';
+      setReauthError(msg);
+      notify(msg, 'error');
     } finally {
       setReauthBusy(false);
     }
@@ -223,16 +306,17 @@ export function AdminShell({ basePath }: { basePath: string }) {
 
   if (checking) {
     return (
-      <div className="min-h-screen veyra-bg flex items-center justify-center text-xs text-[#71717a]">
-        Verifying operations session...
+      <div className="min-h-screen bg-[#fafafa] dark:bg-[#09090b] flex items-center justify-center gap-2 text-xs text-[#71717a]">
+        <Activity className="h-4 w-4 animate-spin text-[#3b82f6]" />
+        <span>Verifying operations session...</span>
       </div>
     );
   }
 
   if (!authorized) {
     return (
-      <div className="min-h-screen veyra-bg flex items-center justify-center p-4 text-[#09090b] dark:text-[#fafafa]">
-        <div className="w-full max-w-md glass-surface p-7 sm:p-8 space-y-6">
+      <div className="min-h-screen bg-[#fafafa] dark:bg-[#09090b] flex items-center justify-center p-4 text-[#09090b] dark:text-[#fafafa]">
+        <div className={`w-full max-w-md ${ADMIN_SURFACE} p-7 sm:p-8 space-y-6 shadow-xl`}>
           <div className="flex items-center justify-between">
             <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#3b82f6]">
               <ShieldCheck className="h-4 w-4" />
@@ -260,7 +344,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
+                  className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
                 />
               </div>
 
@@ -274,7 +358,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
+                  className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
                 />
               </div>
 
@@ -355,9 +439,25 @@ export function AdminShell({ basePath }: { basePath: string }) {
   ];
 
   return (
-    <HiddenAdminCtx.Provider value={{ basePath, apiPrefix, requestReauth }}>
-      <div className="min-h-screen veyra-bg flex text-[#09090b] dark:text-[#fafafa]">
-        <aside className="w-60 shrink-0 border-r border-[#e4e4e7] dark:border-white/10 bg-white/85 dark:bg-[#09090b]/85 backdrop-blur-xl hidden md:flex flex-col justify-between p-4 sticky top-0 h-screen">
+    <HiddenAdminCtx.Provider
+      value={{
+        basePath,
+        apiPrefix,
+        requestReauth,
+        overview,
+        users,
+        payments,
+        logs,
+        loadingData,
+        refreshOverview,
+        refreshUsers,
+        refreshPayments,
+        refreshLogs,
+        setUsersDirect: setUsers,
+      }}
+    >
+      <div className="min-h-screen bg-[#fafafa] dark:bg-[#09090b] flex text-[#09090b] dark:text-[#fafafa]">
+        <aside className="w-60 shrink-0 border-r border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#0d0f15] hidden md:flex flex-col justify-between p-4 sticky top-0 h-screen">
           <div className="space-y-6">
             <div className="px-2">
               <p className="font-display text-lg font-bold">Veyra Ops</p>
@@ -398,23 +498,56 @@ export function AdminShell({ basePath }: { basePath: string }) {
         </aside>
 
         <div className="flex-1 min-w-0 flex flex-col">
-          <header className="h-14 border-b border-[#e4e4e7] dark:border-white/10 bg-white/80 dark:bg-[#09090b]/80 backdrop-blur-xl px-6 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-semibold text-[#3b82f6]">
-              <Lock className="h-3.5 w-3.5" />
-              <span>Hidden Operations Console · No-Index / No-Store</span>
+          <header className="h-14 border-b border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#0d0f15] px-4 sm:px-6 flex items-center justify-between gap-3 sticky top-0 z-30">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[#3b82f6] truncate">
+              <Lock className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Hidden Operations Console · No-Index / No-Store</span>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void preloadConsoleData()}
+                disabled={loadingData}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#e4e4e7] dark:border-white/15 px-2.5 py-1.5 text-xs font-medium hover:border-[#3b82f6] cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loadingData ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+              <ThemeToggle />
+            </div>
           </header>
 
-          <main className="flex-1 p-6 max-w-6xl w-full mx-auto">
+          {/* Mobile navigation strip */}
+          <div className="md:hidden border-b border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#0d0f15] px-4 py-2 flex items-center gap-1.5 overflow-x-auto">
+            {nav.map((item) => {
+              const Icon = item.icon;
+              const active = location.pathname === item.to;
+              return (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium whitespace-nowrap ${
+                    active
+                      ? 'bg-[#3b82f6]/15 text-[#2563eb] dark:text-[#60a5fa]'
+                      : 'text-[#52525b] dark:text-[#a1a1aa]'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+
+          <main className="flex-1 p-4 sm:p-6 max-w-6xl w-full mx-auto">
             <Outlet />
           </main>
         </div>
 
-        {/* Password Re-Authentication Modal for Dangerous Actions */}
+        {/* Password Re-Authentication Modal for Privileged Actions */}
         {reauthPendingFn && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <form onSubmit={handleConfirmReauth} className="glass-surface p-6 max-w-sm w-full space-y-4">
+          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <form onSubmit={handleConfirmReauth} className={`${ADMIN_SURFACE} p-6 max-w-sm w-full space-y-4 shadow-2xl`}>
               <div className="flex items-center gap-2 text-[#3b82f6] font-semibold text-sm">
                 <ShieldAlert className="h-4 w-4" />
                 <span>Re-Authenticate to Confirm Action</span>
@@ -425,26 +558,35 @@ export function AdminShell({ basePath }: { basePath: string }) {
               <input
                 type="password"
                 required
+                autoFocus
                 value={reauthPassword}
                 onChange={(e) => setReauthPassword(e.target.value)}
                 placeholder="Administrator password"
-                className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
+                className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#3b82f6]"
               />
-              {reauthError && <p className="text-xs text-[#ef4444]">{reauthError}</p>}
+              {reauthError && (
+                <div role="alert" className="rounded-lg border border-[#ef4444]/35 bg-[#ef4444]/10 p-2.5 text-xs text-[#ef4444]">
+                  {reauthError}
+                </div>
+              )}
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setReauthPendingFn(null)}
-                  className="rounded-lg border border-[#e4e4e7] dark:border-white/15 px-3.5 py-2 text-xs font-medium cursor-pointer"
+                  disabled={reauthBusy}
+                  onClick={() => {
+                    setReauthPendingFn(null);
+                    setReauthError('');
+                  }}
+                  className="rounded-lg border border-[#e4e4e7] dark:border-white/15 px-3.5 py-2 text-xs font-medium cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={reauthBusy}
-                  className="rounded-lg bg-[#3b82f6] text-white px-4 py-2 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  disabled={reauthBusy || reauthPassword.length < 6}
+                  className="rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2 text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
-                  {reauthBusy ? 'Verifying...' : 'Confirm'}
+                  {reauthBusy ? 'Applying...' : 'Confirm'}
                 </button>
               </div>
             </form>
@@ -456,26 +598,13 @@ export function AdminShell({ basePath }: { basePath: string }) {
 }
 
 export function AdminOverviewPage() {
-  const { apiPrefix } = useHiddenAdmin();
-  const [data, setData] = useState<{
-    stats: {
-      totalUsers: number;
-      proUsers: number;
-      pendingPayments: number;
-      approvedRevenueInr: number;
-      activeWatchlistItems: number;
-      activeAlerts: number;
-      aiQueriesCount: number;
-      dbMode: string;
-    };
-    apiHealth: ApiConfigHealth[];
-  } | null>(null);
+  const { overview, refreshOverview } = useHiddenAdmin();
 
   useEffect(() => {
-    void apiRequest<typeof data>(`${apiPrefix}/overview`).then(setData).catch(() => {});
-  }, [apiPrefix]);
+    void refreshOverview();
+  }, [refreshOverview]);
 
-  if (!data?.stats) {
+  if (!overview?.stats) {
     return (
       <div className="p-8 text-center text-sm text-[#71717a] flex items-center justify-center gap-2">
         <Activity className="h-4 w-4 animate-spin text-[#3b82f6]" />
@@ -484,23 +613,27 @@ export function AdminOverviewPage() {
     );
   }
 
+  const { stats } = overview;
   const cards = [
-    { label: 'Total Users', value: data.stats.totalUsers },
-    { label: 'Active Pro Users', value: data.stats.proUsers },
-    { label: 'Pending Payments', value: data.stats.pendingPayments },
-    { label: 'Approved Revenue', value: `₹${data.stats.approvedRevenueInr.toLocaleString()}` },
-    { label: 'Watchlist Follows', value: data.stats.activeWatchlistItems },
-    { label: 'Active Alerts', value: data.stats.activeAlerts },
-    { label: 'AI Queries Logged', value: data.stats.aiQueriesCount },
-    { label: 'Database Mode', value: data.stats.dbMode },
+    { label: 'Total Users', value: stats.totalUsers },
+    { label: 'Active Pro Users', value: stats.proUsers },
+    { label: 'Pending Payments', value: stats.pendingPayments },
+    { label: 'Approved Revenue', value: `₹${stats.approvedRevenueInr.toLocaleString()}` },
+    { label: 'Watchlist Follows', value: stats.activeWatchlistItems },
+    { label: 'Active Alerts', value: stats.activeAlerts },
+    { label: 'AI Queries Logged', value: stats.aiQueriesCount },
+    { label: 'Database Mode', value: stats.dbMode },
   ];
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold">Platform Overview</h1>
+      <div>
+        <h1 className="font-display text-2xl font-bold">Platform Overview</h1>
+        <p className="text-xs text-[#71717a] mt-1">Real-time platform metrics and operational health.</p>
+      </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((c) => (
-          <div key={c.label} className="glass-surface p-5">
+          <div key={c.label} className={`${ADMIN_SURFACE} p-5`}>
             <p className="text-xs text-[#71717a]">{c.label}</p>
             <p className="font-mono-num text-2xl font-bold mt-1">{c.value}</p>
           </div>
@@ -511,29 +644,63 @@ export function AdminOverviewPage() {
 }
 
 export function AdminUsersPage() {
-  const { apiPrefix, requestReauth } = useHiddenAdmin();
+  const { apiPrefix, users, refreshUsers, setUsersDirect, requestReauth } = useHiddenAdmin();
   const { notify } = useVeyra();
-  const [users, setUsers] = useState<UserProfile[]>([]);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await apiRequest<{ users: UserProfile[] }>(`${apiPrefix}/users`);
-      setUsers(Array.isArray(res?.users) ? res.users : []);
-    } catch {
-      setUsers([]);
-    }
-  }, [apiPrefix]);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | 'pro' | 'free' | 'admin' | 'banned'>('all');
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    void load().catch(() => {});
-  }, [load]);
+    void refreshUsers();
+  }, [refreshUsers]);
+
+  const counts = useMemo(() => {
+    let pro = 0;
+    let admin = 0;
+    let banned = 0;
+    for (const u of users) {
+      if (isProSubscriptionActive(u)) pro++;
+      if (u.is_admin) admin++;
+      if (u.is_banned) banned++;
+    }
+    return { total: users.length, pro, free: users.length - pro, admin, banned };
+  }, [users]);
+
+  const filteredUsers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return users.filter((u) => {
+      const pro = isProSubscriptionActive(u);
+      if (filter === 'pro' && !pro) return false;
+      if (filter === 'free' && pro) return false;
+      if (filter === 'admin' && !u.is_admin) return false;
+      if (filter === 'banned' && !u.is_banned) return false;
+      if (!q) return true;
+      return (
+        (u.full_name || '').toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        u.id.toLowerCase().includes(q)
+      );
+    });
+  }, [users, search, filter]);
 
   const runAction = async (id: string, action: 'grant_pro' | 'revoke_pro' | 'ban' | 'unban') => {
     const execute = async () => {
-      await apiRequest(`${apiPrefix}/users/${id}`, { method: 'PATCH', body: { action } });
-      await load();
-      notify(`Updated user (${action.replace('_', ' ')}).`, 'success');
+      setBusyUserId(id);
+      try {
+        const res = await apiRequest<{ user: UserProfile }>(`${apiPrefix}/users/${id}`, {
+          method: 'PATCH',
+          body: { action },
+        });
+        if (res?.user) {
+          setUsersDirect((prev) => prev.map((item) => (item.id === id ? res.user : item)));
+        }
+        await refreshUsers();
+        notify(`Updated user (${action.replace('_', ' ')}).`, 'success');
+      } finally {
+        setBusyUserId(null);
+      }
     };
+
     try {
       await execute();
     } catch (err) {
@@ -546,15 +713,66 @@ export function AdminUsersPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-display text-2xl font-bold">User Management</h1>
-        <p className="text-xs text-[#71717a] mt-1">
-          Manage Pro subscriptions and account bans. Admin roles are strictly managed via Supabase SQL Editor — never from the web UI.
-        </p>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold">User Management</h1>
+          <p className="text-xs text-[#71717a] mt-1">
+            Manage 30-day Pro passes and account suspensions across all registered accounts.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs font-mono-num">
+          <span className="rounded-lg border border-[#e4e4e7] dark:border-white/10 px-2.5 py-1">
+            Total: <strong>{counts.total}</strong>
+          </span>
+          <span className="rounded-lg border border-[#3b82f6]/30 bg-[#3b82f6]/10 text-[#3b82f6] px-2.5 py-1">
+            Pro: <strong>{counts.pro}</strong>
+          </span>
+          <span className="rounded-lg border border-[#e4e4e7] dark:border-white/10 px-2.5 py-1">
+            Free: <strong>{counts.free}</strong>
+          </span>
+        </div>
       </div>
 
-      <div className="glass-surface overflow-x-auto">
+      {/* Search & Filters */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="h-4 w-4 text-[#71717a] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or email..."
+            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#11131a] pl-9 pr-3.5 py-2 text-xs focus:outline-none focus:border-[#3b82f6]"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          {(
+            [
+              ['all', `All (${counts.total})`],
+              ['pro', `Pro (${counts.pro})`],
+              ['free', `Free (${counts.free})`],
+              ['admin', `Admins (${counts.admin})`],
+              ['banned', `Banned (${counts.banned})`],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              className={`rounded-lg px-2.5 py-1.5 font-medium transition-colors cursor-pointer ${
+                filter === key
+                  ? 'bg-[#3b82f6] text-white'
+                  : 'border border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#11131a] text-[#52525b] dark:text-[#a1a1aa] hover:border-[#3b82f6]/50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={`${ADMIN_SURFACE} overflow-x-auto`}>
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="border-b border-[#e4e4e7] dark:border-white/10 text-xs text-[#71717a]">
@@ -566,45 +784,78 @@ export function AdminUsersPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-[#e4e4e7]/70 dark:divide-white/5">
-            {users.map((u) => {
-              const pro = isProSubscriptionActive(u);
-              return (
-                <tr key={u.id}>
-                  <td className="py-3.5 px-4">
-                    <p className="font-semibold">{u.full_name || 'User'}</p>
-                    <p className="text-xs text-[#71717a]">{u.email}</p>
-                  </td>
-                  <td className="py-3.5 px-4 text-xs font-semibold">
-                    {pro ? <span className="text-[#3b82f6]">Pro</span> : 'Free'}
-                    {u.is_admin && <span className="ml-2 text-[#22c55e]">· Admin</span>}
-                  </td>
-                  <td className="py-3.5 px-4 font-mono-num text-xs text-[#71717a]">
-                    {u.terms_version || 'Pending'}
-                  </td>
-                  <td className="py-3.5 px-4 text-xs">
-                    {u.is_banned ? <span className="text-[#ef4444] font-semibold">Banned</span> : 'Active'}
-                  </td>
-                  <td className="py-3.5 px-4 text-right">
-                    <div className="inline-flex flex-wrap justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void runAction(u.id, pro ? 'revoke_pro' : 'grant_pro')}
-                        className="rounded-lg border border-[#3b82f6]/40 px-2.5 py-1 text-xs font-medium text-[#3b82f6] hover:bg-[#3b82f6]/10 cursor-pointer"
-                      >
-                        {pro ? 'Revoke Pro' : 'Grant 30d Pro'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void runAction(u.id, u.is_banned ? 'unban' : 'ban')}
-                        className="rounded-lg border border-[#ef4444]/40 px-2.5 py-1 text-xs font-medium text-[#ef4444] hover:bg-[#ef4444]/10 cursor-pointer"
-                      >
-                        {u.is_banned ? 'Unban' : 'Ban'}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+            {filteredUsers.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-8 text-center text-xs text-[#71717a]">
+                  No matching user accounts found.
+                </td>
+              </tr>
+            ) : (
+              filteredUsers.map((u) => {
+                const pro = isProSubscriptionActive(u);
+                const isBusy = busyUserId === u.id;
+                return (
+                  <tr key={u.id} className="hover:bg-[#f4f4f5]/50 dark:hover:bg-white/[0.02] transition-colors">
+                    <td className="py-3.5 px-4">
+                      <p className="font-semibold text-[#09090b] dark:text-white">{u.full_name || 'User'}</p>
+                      <p className="text-xs text-[#71717a]">{u.email}</p>
+                    </td>
+                    <td className="py-3.5 px-4 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {pro ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-[#3b82f6]/15 text-[#3b82f6] px-2 py-0.5 font-semibold">
+                            <Crown className="h-3 w-3" />
+                            <span>Pro</span>
+                          </span>
+                        ) : (
+                          <span className="text-[#71717a] font-medium">Free</span>
+                        )}
+                        {u.is_admin && (
+                          <span className="rounded-md bg-[#22c55e]/15 text-[#22c55e] px-2 py-0.5 font-semibold">
+                            Admin
+                          </span>
+                        )}
+                      </div>
+                      {pro && u.pro_expires_at && (
+                        <p className="text-[11px] text-[#71717a] mt-0.5 font-mono-num">
+                          until {new Date(u.pro_expires_at).toLocaleDateString()}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3.5 px-4 font-mono-num text-xs text-[#71717a]">
+                      {u.terms_version || 'Pending'}
+                    </td>
+                    <td className="py-3.5 px-4 text-xs">
+                      {u.is_banned ? (
+                        <span className="text-[#ef4444] font-semibold">Banned</span>
+                      ) : (
+                        <span className="text-[#22c55e] font-medium">Active</span>
+                      )}
+                    </td>
+                    <td className="py-3.5 px-4 text-right">
+                      <div className="inline-flex flex-wrap justify-end gap-1.5">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void runAction(u.id, pro ? 'revoke_pro' : 'grant_pro')}
+                          className="rounded-lg border border-[#3b82f6]/40 px-2.5 py-1 text-xs font-medium text-[#3b82f6] hover:bg-[#3b82f6]/10 cursor-pointer disabled:opacity-50"
+                        >
+                          {isBusy ? 'Updating...' : pro ? 'Revoke Pro' : 'Grant 30d Pro'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void runAction(u.id, u.is_banned ? 'unban' : 'ban')}
+                          className="rounded-lg border border-[#ef4444]/40 px-2.5 py-1 text-xs font-medium text-[#ef4444] hover:bg-[#ef4444]/10 cursor-pointer disabled:opacity-50"
+                        >
+                          {u.is_banned ? 'Unban' : 'Ban'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>
@@ -613,32 +864,28 @@ export function AdminUsersPage() {
 }
 
 export function AdminPaymentsPage() {
-  const { apiPrefix, requestReauth } = useHiddenAdmin();
+  const { apiPrefix, payments, refreshPayments, refreshUsers, requestReauth } = useHiddenAdmin();
   const { notify } = useVeyra();
-  const [payments, setPayments] = useState<
-    Array<PaymentRequest & { user_email: string; user_name: string }>
-  >([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
-
-  const load = useCallback(async () => {
-    const res = await apiRequest<{
-      payments: Array<PaymentRequest & { user_email: string; user_name: string }>;
-    }>(`${apiPrefix}/payments`);
-    setPayments(res.payments);
-  }, [apiPrefix]);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   useEffect(() => {
-    void load().catch(() => {});
-  }, [load]);
+    void refreshPayments();
+  }, [refreshPayments]);
 
   const review = async (id: string, action: 'approve' | 'reject') => {
     const execute = async () => {
-      await apiRequest(`${apiPrefix}/payments/${id}`, {
-        method: 'PATCH',
-        body: { action, admin_note: notes[id] || '' },
-      });
-      await load();
-      notify(action === 'approve' ? 'Payment approved and 30-day Pro activated.' : 'Payment rejected.', 'success');
+      setBusyId(id);
+      try {
+        await apiRequest(`${apiPrefix}/payments/${id}`, {
+          method: 'PATCH',
+          body: { action, admin_note: notes[id] || '' },
+        });
+        await Promise.all([refreshPayments(), refreshUsers()]);
+        notify(action === 'approve' ? 'Payment approved and 30-day Pro activated.' : 'Payment rejected.', 'success');
+      } finally {
+        setBusyId(null);
+      }
     };
 
     try {
@@ -657,13 +904,13 @@ export function AdminPaymentsPage() {
       <h1 className="font-display text-2xl font-bold">Manual Payment Verification Queue</h1>
 
       <div className="space-y-4">
-        {(payments || []).length === 0 ? (
-          <div className="glass-surface p-8 text-center text-sm text-[#71717a]">
+        {payments.length === 0 ? (
+          <div className={`${ADMIN_SURFACE} p-8 text-center text-sm text-[#71717a]`}>
             No payment verification requests submitted yet.
           </div>
         ) : (
-          (payments || []).map((p) => (
-            <div key={p.id} className="glass-surface p-5 space-y-3">
+          payments.map((p) => (
+            <div key={p.id} className={`${ADMIN_SURFACE} p-5 space-y-3`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-semibold">
@@ -697,16 +944,18 @@ export function AdminPaymentsPage() {
                   />
                   <button
                     type="button"
+                    disabled={busyId === p.id}
                     onClick={() => void review(p.id, 'approve')}
-                    className="inline-flex items-center justify-center gap-1 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
+                    className="inline-flex items-center justify-center gap-1 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3.5 py-1.5 text-xs font-semibold cursor-pointer disabled:opacity-50"
                   >
                     <Check className="h-3.5 w-3.5" />
                     <span>Approve (+30d Pro)</span>
                   </button>
                   <button
                     type="button"
+                    disabled={busyId === p.id}
                     onClick={() => void review(p.id, 'reject')}
-                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#ef4444]/40 text-[#ef4444] px-3.5 py-1.5 text-xs font-semibold hover:bg-[#ef4444]/10 cursor-pointer"
+                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#ef4444]/40 text-[#ef4444] px-3.5 py-1.5 text-xs font-semibold hover:bg-[#ef4444]/10 cursor-pointer disabled:opacity-50"
                   >
                     <X className="h-3.5 w-3.5" />
                     <span>Reject</span>
@@ -724,14 +973,12 @@ export function AdminPaymentsPage() {
 }
 
 export function AdminApiHealthPage() {
-  const { apiPrefix } = useHiddenAdmin();
-  const [health, setHealth] = useState<ApiConfigHealth[]>([]);
+  const { overview, refreshOverview } = useHiddenAdmin();
+  const health = overview?.apiHealth || [];
 
   useEffect(() => {
-    void apiRequest<{ apiHealth: ApiConfigHealth[] }>(`${apiPrefix}/overview`)
-      .then((res) => setHealth(Array.isArray(res?.apiHealth) ? res.apiHealth : []))
-      .catch(() => setHealth([]));
-  }, [apiPrefix]);
+    void refreshOverview();
+  }, [refreshOverview]);
 
   return (
     <div className="space-y-6">
@@ -744,7 +991,7 @@ export function AdminApiHealthPage() {
 
       <div className="grid sm:grid-cols-2 gap-4">
         {health.map((svc) => (
-          <div key={svc.service_name} className="glass-surface p-5 flex items-center justify-between gap-4">
+          <div key={svc.service_name} className={`${ADMIN_SURFACE} p-5 flex items-center justify-between gap-4`}>
             <div className="space-y-1">
               <p className="font-semibold text-sm flex items-center gap-2">
                 <Activity className="h-4 w-4 text-[#3b82f6]" />
@@ -768,7 +1015,7 @@ export function AdminDiscordPage() {
   return (
     <div className="space-y-6 max-w-3xl">
       <h1 className="font-display text-2xl font-bold">Discord Bot Deployment</h1>
-      <div className="glass-surface p-6 space-y-4 text-sm text-[#52525b] dark:text-[#a1a1aa]">
+      <div className={`${ADMIN_SURFACE} p-6 space-y-4 text-sm text-[#52525b] dark:text-[#a1a1aa]`}>
         <p>
           The standalone Veyra Discord Bot lives in <code className="font-mono text-xs">/discord-bot</code> using Discord.js v14 with live slash commands.
         </p>
@@ -781,19 +1028,16 @@ export function AdminDiscordPage() {
 }
 
 export function AdminAuditLogPage() {
-  const { apiPrefix } = useHiddenAdmin();
-  const [logs, setLogs] = useState<AdminAuditEntry[]>([]);
+  const { logs, refreshLogs } = useHiddenAdmin();
 
   useEffect(() => {
-    void apiRequest<{ logs: AdminAuditEntry[] }>(`${apiPrefix}/audit-log`)
-      .then((res) => setLogs(Array.isArray(res?.logs) ? res.logs : []))
-      .catch(() => setLogs([]));
-  }, [apiPrefix]);
+    void refreshLogs();
+  }, [refreshLogs]);
 
   return (
     <div className="space-y-6">
       <h1 className="font-display text-2xl font-bold">Append-Only Admin Audit Log</h1>
-      <div className="glass-surface overflow-x-auto">
+      <div className={`${ADMIN_SURFACE} overflow-x-auto`}>
         {logs.length === 0 ? (
           <p className="p-8 text-center text-sm text-[#71717a]">No admin actions recorded yet.</p>
         ) : (

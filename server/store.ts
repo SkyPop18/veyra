@@ -74,7 +74,8 @@ export function getDatabaseMode(): 'supabase' | 'memory-fallback' {
 }
 
 export async function getOrCreateProfileFromSupabaseUser(
-  authUser: SupabaseAuthUser
+  authUser: SupabaseAuthUser,
+  userToken?: string
 ): Promise<UserProfile> {
   const email = (authUser.email || '').toLowerCase();
   if (authUser.user_metadata?.deleted === true) {
@@ -90,7 +91,7 @@ export async function getOrCreateProfileFromSupabaseUser(
     (typeof authUser.user_metadata?.avatar_url === 'string' && authUser.user_metadata.avatar_url) ||
     null;
 
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const { data: existing } = await sb
@@ -103,10 +104,17 @@ export async function getOrCreateProfileFromSupabaseUser(
         if (existing.is_banned || existing.is_suspended || (existing.email && existing.email.startsWith('deleted_'))) {
           throw new Error('This account has been permanently deleted.');
         }
-        const normalized = normalizeProStatus(existing as UserProfile);
+        const mapped = mapDbProfile(existing);
+        // Backfill terms consent if user already consented via registration metadata before schema migration
+        if (!mapped.terms_version && authUser.user_metadata?.terms_accepted_version === '2026-11') {
+          mapped.terms_version = '2026-11';
+          mapped.terms_accepted_at = mapped.terms_accepted_at || authUser.created_at || new Date().toISOString();
+          mapped.privacy_accepted_at = mapped.privacy_accepted_at || authUser.created_at || new Date().toISOString();
+        }
         if (
           existing.subscription_tier === 'pro' &&
-          normalized.subscription_tier === 'free'
+          mapped.subscription_tier === 'free' &&
+          getSupabaseAdmin()
         ) {
           try {
             await sb
@@ -122,7 +130,7 @@ export async function getOrCreateProfileFromSupabaseUser(
             } catch {}
           }
         }
-        return normalized;
+        return mapped;
       }
 
       const { data: inserted, error: insertErr } = await sb
@@ -134,13 +142,12 @@ export async function getOrCreateProfileFromSupabaseUser(
           avatar_url: avatarUrl,
           subscription_tier: 'free',
           is_admin: false,
-          is_banned: false,
         })
         .select('*')
         .single();
 
       if (!insertErr && inserted) {
-        return inserted as UserProfile;
+        return mapDbProfile(inserted);
       }
     } catch (err: any) {
       if (err?.message?.includes('deleted')) throw err;
@@ -198,11 +205,18 @@ export async function getProfileById(userId: string): Promise<UserProfile | null
 
 export async function recordTermsConsent(
   userId: string,
-  version: string
+  version: string,
+  userToken?: string
 ): Promise<UserProfile | null> {
   const now = new Date().toISOString();
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(userToken);
   if (sb) {
+    try {
+      const { data: rpcData, error: rpcErr } = await sb.rpc('accept_user_terms', { version_text: version });
+      if (!rpcErr && rpcData) return mapDbProfile(rpcData);
+    } catch {
+      // RPC may not exist yet; try direct update below
+    }
     try {
       const { data, error } = await sb
         .from('profiles')
@@ -215,7 +229,7 @@ export async function recordTermsConsent(
         .eq('id', userId)
         .select('*')
         .single();
-      if (!error && data) return normalizeProStatus(data as UserProfile);
+      if (!error && data) return mapDbProfile(data);
     } catch {
       // fallback below
     }
@@ -235,7 +249,8 @@ export async function recordTermsConsent(
 
 export async function updateSafeProfile(
   userId: string,
-  patch: { full_name?: string; avatar_url?: string | null; discord_id?: string | null; discord_username?: string | null }
+  patch: { full_name?: string; avatar_url?: string | null; discord_id?: string | null; discord_username?: string | null },
+  userToken?: string
 ): Promise<UserProfile | null> {
   const now = new Date().toISOString();
   const cleanPatch: Record<string, unknown> = { updated_at: now };
@@ -244,7 +259,7 @@ export async function updateSafeProfile(
   if (patch.discord_id !== undefined) cleanPatch.discord_id = patch.discord_id;
   if (patch.discord_username !== undefined) cleanPatch.discord_username = patch.discord_username;
 
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const { data, error } = await sb
@@ -253,7 +268,7 @@ export async function updateSafeProfile(
         .eq('id', userId)
         .select('*')
         .single();
-      if (!error && data) return normalizeProStatus(data as UserProfile);
+      if (!error && data) return mapDbProfile(data);
     } catch {
       // fallback below
     }
@@ -742,8 +757,26 @@ export async function recordInteraction(
 
 // ── Payment Requests (always pending on user submission) ──────────────────────
 
-export async function listUserPaymentRequests(userId: string): Promise<PaymentRequest[]> {
-  const sb = getSupabaseAdmin();
+function mapDbPaymentRow(row: Record<string, any>): PaymentRequest {
+  return {
+    id: String(row.id),
+    user_id: String(row.user_id),
+    amount_inr: Number(row.amount_inr ?? row.amount ?? 200),
+    plan: 'pro_monthly',
+    payment_method: (row.payment_method as PaymentMethod) || 'upi',
+    transaction_id: String(row.transaction_id || row.reference_id || ''),
+    payment_proof_url: row.payment_proof_url ?? null,
+    status: (row.status as PaymentRequest['status']) || 'pending',
+    admin_note: row.admin_note ?? row.notes ?? null,
+    reviewed_by: row.reviewed_by ?? row.verified_by ?? null,
+    reviewed_at: row.reviewed_at ?? row.verified_at ?? null,
+    pro_expires_at: row.pro_expires_at ?? null,
+    created_at: row.created_at || new Date().toISOString(),
+  };
+}
+
+export async function listUserPaymentRequests(userId: string, userToken?: string): Promise<PaymentRequest[]> {
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const { data, error } = await sb
@@ -751,7 +784,7 @@ export async function listUserPaymentRequests(userId: string): Promise<PaymentRe
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
-      if (!error && data) return data as PaymentRequest[];
+      if (!error && data) return data.map(mapDbPaymentRow);
     } catch {
       // fallback
     }
@@ -765,9 +798,11 @@ export async function createPaymentRequest(
     payment_method: PaymentMethod;
     transaction_id: string;
     payment_proof_url: string | null;
-  }
+  },
+  userToken?: string
 ): Promise<PaymentRequest> {
-  const sb = getSupabaseAdmin();
+  const txId = payload.transaction_id.trim();
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const { data, error } = await sb
@@ -776,16 +811,28 @@ export async function createPaymentRequest(
           user_id: userId,
           amount_inr: 200,
           payment_method: payload.payment_method,
-          transaction_id: payload.transaction_id.trim(),
+          transaction_id: txId,
           payment_proof_url: payload.payment_proof_url,
           status: 'pending',
-          reviewed_by: null,
-          admin_note: null,
-          reviewed_at: null,
         })
         .select('*')
         .single();
-      if (!error && data) return data as PaymentRequest;
+      if (!error && data) return mapDbPaymentRow(data);
+
+      // Compatibility fallback if live DB uses reference_id / amount
+      const { data: legacyData, error: legacyErr } = await sb
+        .from('payment_requests')
+        .insert({
+          user_id: userId,
+          amount: 200,
+          currency: 'INR',
+          payment_method: payload.payment_method,
+          reference_id: txId,
+          status: 'pending',
+        })
+        .select('*')
+        .single();
+      if (!legacyErr && legacyData) return mapDbPaymentRow(legacyData);
     } catch {
       // fallback
     }
@@ -796,7 +843,7 @@ export async function createPaymentRequest(
     amount_inr: 200,
     plan: 'pro_monthly',
     payment_method: payload.payment_method,
-    transaction_id: payload.transaction_id.trim(),
+    transaction_id: txId,
     payment_proof_url: payload.payment_proof_url,
     status: 'pending',
     admin_note: null,
@@ -1098,8 +1145,17 @@ export async function recordAdminAudit(params: {
   const sb = getDbClient(userToken);
   if (sb) {
     try {
-      await sb.from('admin_audit_log').insert(dbParams);
-      return;
+      const { error } = await sb.from('admin_audit_log').insert(dbParams);
+      if (!error) return;
+      // Compatibility fallback if ip_address / user_agent columns are absent
+      const { error: legacyErr } = await sb.from('admin_audit_log').insert({
+        admin_id: dbParams.admin_id,
+        action: dbParams.action,
+        target_type: dbParams.target_type,
+        target_id: dbParams.target_id,
+        details: dbParams.details,
+      });
+      if (!legacyErr) return;
     } catch {
       // fallback
     }
@@ -1208,7 +1264,7 @@ export async function adminListPayments(userToken?: string): Promise<
         .select('*')
         .order('created_at', { ascending: false })
         .limit(200);
-      if (!error && data) list = data as PaymentRequest[];
+      if (!error && data) list = data.map(mapDbPaymentRow);
     } catch {
       list = fallback.paymentRequests;
     }
@@ -1232,12 +1288,33 @@ export async function adminReviewPayment(params: {
   adminNote: string;
   adminId: string;
   userToken?: string;
-}): Promise<{ payment: PaymentRequest; updatedUser: UserProfile | null } | null> {
+}): Promise<{ payment: PaymentRequest; updatedUser: UserProfile | null; errorMessage?: string } | null> {
   const now = new Date().toISOString();
   const proExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const sb = getDbClient(params.userToken);
+  const sbAdmin = getSupabaseAdmin();
+  const sbUser = params.userToken ? getSupabaseUserClient(params.userToken) : null;
+  const sb = sbAdmin || sbUser;
   if (sb) {
+    // 1. Try SECURITY DEFINER RPC (works even without service_role key once migration is applied)
+    if (sbUser) {
+      try {
+        const { data: rpcRes, error: rpcErr } = await sbUser.rpc('admin_review_payment_request', {
+          payment_id: params.paymentId,
+          action_name: params.action,
+          note: params.adminNote || '',
+        });
+        if (!rpcErr && rpcRes?.payment) {
+          return {
+            payment: mapDbPaymentRow(rpcRes.payment),
+            updatedUser: rpcRes.updatedUser ? mapDbProfile(rpcRes.updatedUser) : null,
+          };
+        }
+      } catch {
+        // continue to direct update if RPC not deployed yet
+      }
+    }
+
     try {
       const { data: existing } = await sb
         .from('payment_requests')
@@ -1246,11 +1323,15 @@ export async function adminReviewPayment(params: {
         .maybeSingle();
       if (!existing) return null;
 
+      const noteVal =
+        params.adminNote ||
+        (params.action === 'approve' ? 'Verified and activated for 30 days.' : 'Rejected during verification.');
+
       const { data: updatedPay, error } = await sb
         .from('payment_requests')
         .update({
           status: params.action === 'approve' ? 'approved' : 'rejected',
-          admin_note: params.adminNote || (params.action === 'approve' ? 'Verified and activated for 30 days.' : 'Rejected during verification.'),
+          admin_note: noteVal,
           reviewed_by: params.adminId,
           reviewed_at: now,
         })
@@ -1258,7 +1339,13 @@ export async function adminReviewPayment(params: {
         .select('*')
         .single();
 
-      if (error || !updatedPay) return null;
+      if (error || !updatedPay) {
+        return {
+          payment: mapDbPaymentRow(existing),
+          updatedUser: null,
+          errorMessage: error?.message || 'Database rejected payment update.',
+        };
+      }
 
       let updatedUser: UserProfile | null = null;
       if (params.action === 'approve') {
@@ -1275,7 +1362,7 @@ export async function adminReviewPayment(params: {
         if (u) updatedUser = mapDbProfile(u);
       }
 
-      return { payment: updatedPay as PaymentRequest, updatedUser };
+      return { payment: mapDbPaymentRow(updatedPay), updatedUser };
     } catch {
       // fallback below
     }
@@ -1307,7 +1394,7 @@ export async function adminManageUser(params: {
   targetUserId: string;
   action: 'grant_pro' | 'revoke_pro' | 'ban' | 'unban';
   userToken?: string;
-}): Promise<UserProfile | null> {
+}): Promise<{ user: UserProfile | null; errorMessage?: string }> {
   const now = new Date().toISOString();
   const patch: Record<string, unknown> = { updated_at: now };
 
@@ -1319,12 +1406,36 @@ export async function adminManageUser(params: {
     patch.pro_expires_at = null;
   } else if (params.action === 'ban') {
     patch.is_banned = true;
+    patch.is_suspended = true;
   } else if (params.action === 'unban') {
     patch.is_banned = false;
+    patch.is_suspended = false;
   }
 
-  const sb = getDbClient(params.userToken);
+  const sbAdmin = getSupabaseAdmin();
+  const sbUser = params.userToken ? getSupabaseUserClient(params.userToken) : null;
+  const sb = sbAdmin || sbUser;
+
   if (sb) {
+    let lastDbError = '';
+
+    // 1. Try hardened SECURITY DEFINER RPC first when using admin JWT
+    if (!sbAdmin && sbUser) {
+      try {
+        const { data: rpcData, error: rpcErr } = await sbUser.rpc('admin_manage_user_profile', {
+          target_user_id: params.targetUserId,
+          action_name: params.action,
+        });
+        if (!rpcErr && rpcData) {
+          return { user: mapDbProfile(rpcData) };
+        }
+        if (rpcErr) lastDbError = rpcErr.message;
+      } catch (err) {
+        lastDbError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // 2. Direct table update (succeeds with service_role key)
     try {
       const { data, error } = await sb
         .from('profiles')
@@ -1332,9 +1443,10 @@ export async function adminManageUser(params: {
         .eq('id', params.targetUserId)
         .select('*')
         .single();
-      if (!error && data) return mapDbProfile(data);
+      if (!error && data) return { user: mapDbProfile(data) };
+      if (error) lastDbError = error.message;
 
-      // Compatibility fallback if live schema uses is_suspended or omits pro_expires_at
+      // Compatibility fallback if live DB omits pro_expires_at or is_banned
       const compatPatch: Record<string, unknown> = { updated_at: now };
       if (params.action === 'grant_pro' || params.action === 'revoke_pro') {
         compatPatch.subscription_tier = patch.subscription_tier;
@@ -1347,17 +1459,26 @@ export async function adminManageUser(params: {
         .eq('id', params.targetUserId)
         .select('*')
         .single();
-      if (!compatErr && compatData) return mapDbProfile(compatData);
-    } catch {
-      // fallback
+      if (!compatErr && compatData) return { user: mapDbProfile(compatData) };
+      if (compatErr) lastDbError = compatErr.message;
+    } catch (err) {
+      lastDbError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (lastDbError) {
+      return {
+        user: null,
+        errorMessage:
+          'Database blocked cross-user update. Configure SUPABASE_SERVICE_ROLE_KEY in Vercel or apply supabase/migrations/20261125_security_hardening.sql in Supabase SQL Editor.',
+      };
     }
   }
 
   const mem = fallback.profiles.get(params.targetUserId);
-  if (!mem) return null;
+  if (!mem) return { user: null, errorMessage: 'User not found.' };
   const updated = { ...mem, ...(patch as Partial<UserProfile>) };
   fallback.profiles.set(params.targetUserId, updated);
-  return updated;
+  return { user: updated };
 }
 
 export async function adminListAuditLogs(userToken?: string): Promise<AdminAuditEntry[]> {

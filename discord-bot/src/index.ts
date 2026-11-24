@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import {
   Client,
   GatewayIntentBits,
@@ -15,6 +16,14 @@ import { createVeyraEmbed, formatSignedPct } from './utils/embeds.js';
 const VEYRA_API_BASE = (process.env.VEYRA_API_URL || 'https://veyra-global.vercel.app').replace(/\/$/, '');
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+
+function getBotApiAuthHeader(): string | null {
+  const explicit = (process.env.DISCORD_BOT_API_SECRET || '').trim();
+  if (explicit) return `Bearer ${explicit}`;
+  if (!BOT_TOKEN) return null;
+  const derived = crypto.createHash('sha256').update(`veyra-bot:${BOT_TOKEN}`).digest('hex');
+  return `Bearer ${derived}`;
+}
 
 const commands = [
   new SlashCommandBuilder()
@@ -72,7 +81,14 @@ const commands = [
 ];
 
 async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${VEYRA_API_BASE}${path}`, options);
+  const authHeader = getBotApiAuthHeader();
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+  if (authHeader && path.startsWith('/api/bot/')) {
+    headers.Authorization = authHeader;
+  }
+  const res = await fetch(`${VEYRA_API_BASE}${path}`, { ...options, headers });
   if (!res.ok) {
     const errorJson = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(errorJson.error || `Veyra API error (${res.status})`);
