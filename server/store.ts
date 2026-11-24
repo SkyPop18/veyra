@@ -1062,6 +1062,28 @@ export async function deleteUserAccount(
 // ── Admin Operations (strictly verified by hidden admin middleware) ───────────
 // NOTE: NO grant_admin / revoke_admin action exists in web API. First admin is set via Supabase SQL Editor ONLY.
 
+function mapDbProfile(row: Record<string, any>): UserProfile {
+  const email = String(row.email || '').toLowerCase();
+  const base: UserProfile = {
+    id: String(row.id),
+    email,
+    full_name: row.full_name ?? null,
+    avatar_url: row.avatar_url ?? null,
+    discord_id: row.discord_id ?? null,
+    discord_username: row.discord_username ?? null,
+    subscription_tier: row.subscription_tier === 'pro' ? 'pro' : 'free',
+    pro_expires_at: row.pro_expires_at ?? null,
+    is_admin: Boolean(row.is_admin || isEmailInAdminAllowlist(email)),
+    is_banned: Boolean(row.is_banned || row.is_suspended),
+    terms_accepted_at: row.terms_accepted_at ?? null,
+    privacy_accepted_at: row.privacy_accepted_at ?? null,
+    terms_version: row.terms_version ?? null,
+    created_at: row.created_at || new Date().toISOString(),
+    updated_at: row.updated_at || row.created_at || new Date().toISOString(),
+  };
+  return normalizeProStatus(base);
+}
+
 export async function recordAdminAudit(params: {
   admin_id: string;
   action: string;
@@ -1070,11 +1092,13 @@ export async function recordAdminAudit(params: {
   details: Record<string, unknown>;
   ip_address: string | null;
   user_agent: string | null;
+  userToken?: string;
 }): Promise<void> {
-  const sb = getSupabaseAdmin();
+  const { userToken, ...dbParams } = params;
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
-      await sb.from('admin_audit_log').insert(params);
+      await sb.from('admin_audit_log').insert(dbParams);
       return;
     } catch {
       // fallback
@@ -1082,36 +1106,101 @@ export async function recordAdminAudit(params: {
   }
   fallback.auditLogs.unshift({
     id: newId('aud'),
-    ...params,
+    admin_id: dbParams.admin_id,
+    action: dbParams.action,
+    target_type: dbParams.target_type,
+    target_id: dbParams.target_id,
+    details: dbParams.details,
+    ip_address: dbParams.ip_address,
+    user_agent: dbParams.user_agent,
     created_at: new Date().toISOString(),
   });
 }
 
-export async function adminListUsers(): Promise<UserProfile[]> {
-  const sb = getSupabaseAdmin();
-  if (sb) {
+export async function adminListUsers(userToken?: string): Promise<UserProfile[]> {
+  const byId = new Map<string, UserProfile>();
+
+  const sbAdmin = getSupabaseAdmin();
+  const sbClient = sbAdmin || (userToken ? getSupabaseUserClient(userToken) : null);
+
+  if (sbClient) {
     try {
-      const { data, error } = await sb
+      const { data, error } = await sbClient
         .from('profiles')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(200);
-      if (!error && data) return (data as UserProfile[]).map(normalizeProStatus);
+        .limit(500);
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          const mapped = mapDbProfile(row);
+          if (!mapped.email.startsWith('deleted_')) {
+            byId.set(mapped.id, mapped);
+          }
+        }
+      }
     } catch {
-      // fallback
+      // ignore query error
     }
   }
-  return Array.from(fallback.profiles.values()).map(normalizeProStatus);
+
+  // If service-role client is configured, also pull auth.users so users without a profiles row still appear
+  if (sbAdmin) {
+    try {
+      const { data: authList, error: authErr } = await sbAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 500,
+      });
+      if (!authErr && Array.isArray(authList?.users)) {
+        for (const au of authList.users) {
+          if (au.user_metadata?.deleted === true) continue;
+          const email = (au.email || '').toLowerCase();
+          if (!email || email.startsWith('deleted_')) continue;
+          if (!byId.has(au.id)) {
+            byId.set(
+              au.id,
+              mapDbProfile({
+                id: au.id,
+                email,
+                full_name:
+                  au.user_metadata?.full_name ||
+                  au.user_metadata?.name ||
+                  email.split('@')[0],
+                avatar_url: au.user_metadata?.avatar_url || null,
+                subscription_tier: 'free',
+                is_admin: isEmailInAdminAllowlist(email),
+                is_banned: false,
+                created_at: au.created_at,
+                updated_at: au.updated_at || au.created_at,
+              })
+            );
+          }
+        }
+      }
+    } catch {
+      // ignore auth admin listing error
+    }
+  }
+
+  // Include any in-memory profiles not already loaded from DB
+  for (const mem of fallback.profiles.values()) {
+    if (!byId.has(mem.id) && !mem.email?.startsWith('deleted_')) {
+      byId.set(mem.id, normalizeProStatus(mem));
+    }
+  }
+
+  return Array.from(byId.values()).sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 }
 
-export async function adminListPayments(): Promise<
+export async function adminListPayments(userToken?: string): Promise<
   Array<PaymentRequest & { user_email: string; user_name: string }>
 > {
-  const users = await adminListUsers();
+  const users = await adminListUsers(userToken);
   const byId = new Map(users.map((u) => [u.id, u]));
 
   let list: PaymentRequest[] = [];
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const { data, error } = await sb
@@ -1142,11 +1231,12 @@ export async function adminReviewPayment(params: {
   action: 'approve' | 'reject';
   adminNote: string;
   adminId: string;
+  userToken?: string;
 }): Promise<{ payment: PaymentRequest; updatedUser: UserProfile | null } | null> {
   const now = new Date().toISOString();
   const proExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(params.userToken);
   if (sb) {
     try {
       const { data: existing } = await sb
@@ -1182,7 +1272,7 @@ export async function adminReviewPayment(params: {
           .eq('id', existing.user_id)
           .select('*')
           .single();
-        if (u) updatedUser = u as UserProfile;
+        if (u) updatedUser = mapDbProfile(u);
       }
 
       return { payment: updatedPay as PaymentRequest, updatedUser };
@@ -1216,9 +1306,10 @@ export async function adminReviewPayment(params: {
 export async function adminManageUser(params: {
   targetUserId: string;
   action: 'grant_pro' | 'revoke_pro' | 'ban' | 'unban';
+  userToken?: string;
 }): Promise<UserProfile | null> {
   const now = new Date().toISOString();
-  const patch: Partial<UserProfile> = { updated_at: now };
+  const patch: Record<string, unknown> = { updated_at: now };
 
   if (params.action === 'grant_pro') {
     patch.subscription_tier = 'pro';
@@ -1232,7 +1323,7 @@ export async function adminManageUser(params: {
     patch.is_banned = false;
   }
 
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(params.userToken);
   if (sb) {
     try {
       const { data, error } = await sb
@@ -1241,7 +1332,22 @@ export async function adminManageUser(params: {
         .eq('id', params.targetUserId)
         .select('*')
         .single();
-      if (!error && data) return data as UserProfile;
+      if (!error && data) return mapDbProfile(data);
+
+      // Compatibility fallback if live schema uses is_suspended or omits pro_expires_at
+      const compatPatch: Record<string, unknown> = { updated_at: now };
+      if (params.action === 'grant_pro' || params.action === 'revoke_pro') {
+        compatPatch.subscription_tier = patch.subscription_tier;
+      } else {
+        compatPatch.is_suspended = params.action === 'ban';
+      }
+      const { data: compatData, error: compatErr } = await sb
+        .from('profiles')
+        .update(compatPatch)
+        .eq('id', params.targetUserId)
+        .select('*')
+        .single();
+      if (!compatErr && compatData) return mapDbProfile(compatData);
     } catch {
       // fallback
     }
@@ -1249,13 +1355,13 @@ export async function adminManageUser(params: {
 
   const mem = fallback.profiles.get(params.targetUserId);
   if (!mem) return null;
-  const updated = { ...mem, ...patch };
+  const updated = { ...mem, ...(patch as Partial<UserProfile>) };
   fallback.profiles.set(params.targetUserId, updated);
   return updated;
 }
 
-export async function adminListAuditLogs(): Promise<AdminAuditEntry[]> {
-  const sb = getSupabaseAdmin();
+export async function adminListAuditLogs(userToken?: string): Promise<AdminAuditEntry[]> {
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const { data, error } = await sb
@@ -1271,7 +1377,7 @@ export async function adminListAuditLogs(): Promise<AdminAuditEntry[]> {
   return fallback.auditLogs.slice(0, 150);
 }
 
-export async function adminGetOverviewStats(): Promise<{
+export async function adminGetOverviewStats(userToken?: string): Promise<{
   totalUsers: number;
   proUsers: number;
   pendingPayments: number;
@@ -1281,7 +1387,7 @@ export async function adminGetOverviewStats(): Promise<{
   aiQueriesCount: number;
   dbMode: 'supabase' | 'memory-fallback';
 }> {
-  const [users, payments] = await Promise.all([adminListUsers(), adminListPayments()]);
+  const [users, payments] = await Promise.all([adminListUsers(userToken), adminListPayments(userToken)]);
   const proUsers = users.filter((u) => isProSubscriptionActive(u)).length;
   const pendingPayments = payments.filter((p) => p.status === 'pending').length;
   const approvedRevenueInr = payments
@@ -1292,7 +1398,7 @@ export async function adminGetOverviewStats(): Promise<{
   let activeAlerts = fallback.alerts.length;
   let aiQueriesCount = fallback.aiAnalyses.length;
 
-  const sb = getSupabaseAdmin();
+  const sb = getDbClient(userToken);
   if (sb) {
     try {
       const [wRes, aRes, aiRes] = await Promise.all([

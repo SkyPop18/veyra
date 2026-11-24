@@ -7,6 +7,10 @@ import {
   Line,
   AreaChart,
   Area,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
   XAxis,
   YAxis,
   Tooltip,
@@ -20,9 +24,28 @@ interface MarkdownViewProps {
 }
 
 interface ChartSpec {
-  type?: 'bar' | 'line' | 'area';
+  type?: 'bar' | 'line' | 'area' | 'pie';
   title?: string;
-  data: Array<{ name: string; value: number; [key: string]: unknown }>;
+  data: Array<Record<string, unknown>>;
+}
+
+const CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4', '#ef4444'];
+
+function tryParseChartSpec(raw: string, lang: string): ChartSpec | null {
+  const isExplicitChart = lang === 'chart' || lang === 'json-chart' || lang === 'recharts';
+  if (!isExplicitChart && lang !== 'json' && lang !== '') return null;
+  try {
+    // Strip trailing commas before closing ] or } for resilient LLM output parsing
+    const cleaned = raw.trim().replace(/,\s*([}\]])/g, '$1');
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.data) || parsed.data.length === 0) {
+      return null;
+    }
+    if (!isExplicitChart && !parsed.type) return null;
+    return parsed as unknown as ChartSpec;
+  } catch {
+    return null;
+  }
 }
 
 function parseInline(text: string): React.ReactNode[] {
@@ -72,46 +95,98 @@ function parseInline(text: string): React.ReactNode[] {
 }
 
 function InteractiveChart({ spec }: { spec: ChartSpec }) {
-  const chartType = spec.type || 'bar';
-  const data = spec.data || [];
+  const rawType = String(spec.type || 'bar').toLowerCase();
+  const chartType: 'bar' | 'line' | 'area' | 'pie' =
+    rawType === 'line' || rawType === 'area' || rawType === 'pie' ? rawType : 'bar';
+  const rawData = Array.isArray(spec.data) ? spec.data : [];
 
-  if (!Array.isArray(data) || data.length === 0) return null;
+  if (rawData.length === 0) return null;
+
+  // Normalize X-axis key (supports name, label, currency, symbol, date, pair)
+  const firstRow = rawData[0] || {};
+  const labelKey =
+    ['name', 'label', 'currency', 'symbol', 'pair', 'date', 'period'].find((k) => k in firstRow) ||
+    Object.keys(firstRow).find((k) => typeof firstRow[k] === 'string') ||
+    'name';
+
+  // Detect all numeric Y-series keys (supports single "value" or multi-series like USD/EUR/INR)
+  const numericKeys = Object.keys(firstRow).filter((k) => {
+    if (k === labelKey) return false;
+    const v = firstRow[k];
+    return typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)));
+  });
+  const seriesKeys = numericKeys.length > 0 ? numericKeys : ['value'];
+
+  const data = rawData.map((row, idx) => {
+    const out: Record<string, unknown> = {
+      ...row,
+      [labelKey]: row[labelKey] ?? `#${idx + 1}`,
+    };
+    for (const key of seriesKeys) {
+      const n = Number(row[key]);
+      out[key] = Number.isFinite(n) ? n : 0;
+    }
+    return out;
+  });
+
+  const tooltipStyle = {
+    backgroundColor: '#09090b',
+    borderColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 8,
+    fontSize: 12,
+    color: '#ffffff',
+  };
 
   return (
-    <div className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/70 dark:bg-white/[0.03] p-4 shadow-xs">
+    <div className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/75 dark:bg-white/[0.04] p-4 shadow-xs">
       {spec.title && (
         <div className="flex items-center gap-2 mb-3 text-xs font-semibold text-[#09090b] dark:text-white">
           <BarChart3 className="h-4 w-4 text-[#3b82f6]" />
           <span>{spec.title}</span>
         </div>
       )}
-      <div className="w-full h-48 sm:h-56">
+      <div className="w-full h-56 sm:h-64">
         <ResponsiveContainer width="100%" height="100%">
-          {chartType === 'line' ? (
-            <LineChart data={data} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+          {chartType === 'pie' ? (
+            <PieChart>
+              <Pie
+                data={data}
+                dataKey={seriesKeys[0]}
+                nameKey={labelKey}
+                cx="50%"
+                cy="50%"
+                innerRadius={42}
+                outerRadius={78}
+                paddingAngle={3}
+              >
+                {data.map((_entry, idx) => (
+                  <Cell key={`cell-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip contentStyle={tooltipStyle} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          ) : chartType === 'line' ? (
+            <LineChart data={data} margin={{ top: 10, right: 12, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <XAxis dataKey={labelKey} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#09090b',
-                  borderColor: 'rgba(255,255,255,0.1)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: '#ffffff',
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke="#3b82f6"
-                strokeWidth={2.5}
-                dot={{ r: 3.5, fill: '#3b82f6' }}
-                activeDot={{ r: 5 }}
-              />
+              <Tooltip contentStyle={tooltipStyle} />
+              {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {seriesKeys.map((key, idx) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={CHART_COLORS[idx % CHART_COLORS.length]}
+                  strokeWidth={2.5}
+                  dot={{ r: 3.5, fill: CHART_COLORS[idx % CHART_COLORS.length] }}
+                  activeDot={{ r: 5 }}
+                />
+              ))}
             </LineChart>
           ) : chartType === 'area' ? (
-            <AreaChart data={data} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+            <AreaChart data={data} margin={{ top: 10, right: 12, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
@@ -119,34 +194,37 @@ function InteractiveChart({ spec }: { spec: ChartSpec }) {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <XAxis dataKey={labelKey} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#09090b',
-                  borderColor: 'rgba(255,255,255,0.1)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: '#ffffff',
-                }}
-              />
-              <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} fill="url(#area-grad)" />
+              <Tooltip contentStyle={tooltipStyle} />
+              {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {seriesKeys.map((key, idx) => (
+                <Area
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={CHART_COLORS[idx % CHART_COLORS.length]}
+                  strokeWidth={2}
+                  fill={idx === 0 ? 'url(#area-grad)' : CHART_COLORS[idx % CHART_COLORS.length]}
+                  fillOpacity={idx === 0 ? 1 : 0.15}
+                />
+              ))}
             </AreaChart>
           ) : (
-            <BarChart data={data} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+            <BarChart data={data} margin={{ top: 10, right: 12, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <XAxis dataKey={labelKey} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#09090b',
-                  borderColor: 'rgba(255,255,255,0.1)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: '#ffffff',
-                }}
-              />
-              <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+              <Tooltip contentStyle={tooltipStyle} />
+              {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {seriesKeys.map((key, idx) => (
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  fill={CHART_COLORS[idx % CHART_COLORS.length]}
+                  radius={[4, 4, 0, 0]}
+                />
+              ))}
             </BarChart>
           )}
         </ResponsiveContainer>
@@ -238,14 +316,9 @@ export function MarkdownView({ content, className = '' }: MarkdownViewProps) {
         const codeText = codeBlockLines.join('\n');
         const blockKey = `code-${elements.length}`;
 
-        if (codeBlockLang === 'chart' || codeBlockLang === 'json-chart') {
-          try {
-            const parsed = JSON.parse(codeText) as ChartSpec;
-            elements.push(<InteractiveChart key={blockKey} spec={parsed} />);
-          } catch {
-            // If still streaming or JSON malformed, render as code block fallback
-            elements.push(<CodeBlock key={blockKey} code={codeText} lang={codeBlockLang} />);
-          }
+        const chartSpec = tryParseChartSpec(codeText, codeBlockLang);
+        if (chartSpec) {
+          elements.push(<InteractiveChart key={blockKey} spec={chartSpec} />);
         } else {
           elements.push(<CodeBlock key={blockKey} code={codeText} lang={codeBlockLang} />);
         }
@@ -356,13 +429,19 @@ export function MarkdownView({ content, className = '' }: MarkdownViewProps) {
   if (inCodeBlock && codeBlockLines.length > 0) {
     const codeText = codeBlockLines.join('\n');
     const blockKey = `code-trailing-${elements.length}`;
-    if (codeBlockLang === 'chart' || codeBlockLang === 'json-chart') {
-      try {
-        const parsed = JSON.parse(codeText) as ChartSpec;
-        elements.push(<InteractiveChart key={blockKey} spec={parsed} />);
-      } catch {
-        elements.push(<CodeBlock key={blockKey} code={codeText} lang={codeBlockLang} />);
-      }
+    const chartSpec = tryParseChartSpec(codeText, codeBlockLang);
+    if (chartSpec) {
+      elements.push(<InteractiveChart key={blockKey} spec={chartSpec} />);
+    } else if (codeBlockLang === 'chart' || codeBlockLang === 'json-chart') {
+      elements.push(
+        <div
+          key={blockKey}
+          className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/60 dark:bg-white/[0.03] p-4 flex items-center gap-2 text-xs text-[#71717a]"
+        >
+          <BarChart3 className="h-4 w-4 text-[#3b82f6] animate-pulse" />
+          <span>Rendering interactive market chart...</span>
+        </div>
+      );
     } else {
       elements.push(<CodeBlock key={blockKey} code={codeText} lang={codeBlockLang} />);
     }

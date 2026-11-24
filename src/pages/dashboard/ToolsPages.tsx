@@ -461,7 +461,7 @@ export function HeatmapPage() {
 
   const hoverTimerRef = useRef<number | null>(null);
 
-  const handleMouseEnterDot = (c: HeatmapCurrency, x: number, y: number) => {
+  const handleMouseEnterDot = (c: FiatCurrency, x: number, y: number) => {
     if (hoverTimerRef.current) {
       window.clearTimeout(hoverTimerRef.current);
       hoverTimerRef.current = null;
@@ -1358,11 +1358,11 @@ export function AlertsPage() {
   const currentAsset = useMemo(() => {
     const sym = symbol.trim().toUpperCase();
     if (assetType === 'crypto') {
-      const c = (crypto || []).find((x) => x?.code?.toUpperCase() === sym || x?.id?.toUpperCase() === sym);
+      const c = (crypto || []).find((x) => x?.symbol?.toUpperCase() === sym || x?.id?.toUpperCase() === sym);
       if (c) {
-        const p = typeof c.price_usd === 'number' ? c.price_usd : 0;
+        const p = typeof c.current_price === 'number' ? c.current_price : 0;
         return {
-          symbol: c.code || sym,
+          symbol: c.symbol || sym,
           name: c.name || sym,
           type: 'crypto' as const,
           price: p,
@@ -1372,7 +1372,7 @@ export function AlertsPage() {
     } else {
       const f = (fiat || []).find((x) => x?.code?.toUpperCase() === sym);
       if (f) {
-        const rate = typeof f.vsUsdRate === 'number' ? f.vsUsdRate : 1;
+        const rate = typeof f.rateVsUsd === 'number' ? f.rateVsUsd : 1;
         return {
           symbol: f.code || sym,
           name: f.name || sym,
@@ -1392,16 +1392,16 @@ export function AlertsPage() {
       name: f.name,
       country: f.country || '',
       type: 'fiat' as const,
-      price: typeof f.vsUsdRate === 'number' ? f.vsUsdRate : 1,
-      formattedPrice: `1 USD = ${typeof f.vsUsdRate === 'number' ? f.vsUsdRate : 1} ${f.code}`,
+      price: typeof f.rateVsUsd === 'number' ? f.rateVsUsd : 1,
+      formattedPrice: `1 USD = ${typeof f.rateVsUsd === 'number' ? f.rateVsUsd : 1} ${f.code}`,
     }));
     const cryptoList = (crypto || []).map((c) => ({
-      symbol: c.code,
+      symbol: c.symbol,
       name: c.name,
       country: '',
       type: 'crypto' as const,
-      price: typeof c.price_usd === 'number' ? c.price_usd : 0,
-      formattedPrice: formatPrice(typeof c.price_usd === 'number' ? c.price_usd : 0),
+      price: typeof c.current_price === 'number' ? c.current_price : 0,
+      formattedPrice: formatPrice(typeof c.current_price === 'number' ? c.current_price : 0),
     }));
 
     const combined = assetType === 'fiat' ? [...fiatList, ...cryptoList] : [...cryptoList, ...fiatList];

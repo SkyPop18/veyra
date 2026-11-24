@@ -37,7 +37,12 @@ function loadPersistedChat(): ChatTurn[] {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Drop any stale empty assistant placeholders left by an interrupted session
+        return parsed.filter(
+          (m: ChatTurn) => !(m && m.role === 'assistant' && !m.text && !m.error)
+        );
+      }
     }
   } catch {
     // Ignore storage parse issues
@@ -148,16 +153,12 @@ export function AiAnalysisPage() {
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let receivedAnyChunk = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const rawEvent of events) {
-          const line = rawEvent.trim();
+      const processEventBlock = (rawEvent: string) => {
+        const lines = rawEvent.split(/\r?\n/);
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
           if (!line.startsWith('data:')) continue;
           const payload = JSON.parse(line.slice(5).trim()) as {
             chunk?: string;
@@ -166,6 +167,7 @@ export function AiAnalysisPage() {
             entry?: AiAnalysisEntry;
           };
           if (payload.chunk) {
+            receivedAnyChunk = true;
             setMessages((prev) =>
               prev.map((m) => (m.id === assistantId ? { ...m, text: m.text + payload.chunk } : m))
             );
@@ -176,6 +178,25 @@ export function AiAnalysisPage() {
             throw new Error(payload.error || 'AI stream interrupted.');
           }
         }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() || '';
+        for (const rawEvent of events) {
+          processEventBlock(rawEvent);
+        }
+      }
+
+      if (buffer.trim()) {
+        processEventBlock(buffer);
+      }
+
+      if (!receivedAnyChunk) {
+        throw new Error('No response was received from the market analyst. Please try again.');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to generate market analysis right now.';

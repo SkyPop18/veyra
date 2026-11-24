@@ -370,30 +370,33 @@ export function createApiApp() {
     try {
       const emailRedirectTo = 'https://veyra-global.vercel.app/api/auth/callback';
 
-      // Attempt to resend signup confirmation email
-      const { error: resendErr } = await sb.auth.resend({
-        type: 'signup',
+      // Use signInWithOtp first so BOTH already-confirmed users and unconfirmed accounts receive a valid link,
+      // because supabase.auth.resend({ type: 'signup' }) silently no-ops with { error: null } when already confirmed.
+      const { error: otpErr } = await sb.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo },
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo,
+        },
       });
 
-      if (resendErr) {
-        // If user already exists or confirmed, send magic sign-in link
-        const { error: otpErr } = await sb.auth.signInWithOtp({
+      if (otpErr) {
+        // Fallback to signup verification resend for fresh unconfirmed signups if OTP rejects unconfirmed users
+        const { error: resendErr } = await sb.auth.resend({
+          type: 'signup',
           email,
-          options: {
-            shouldCreateUser: false,
-            emailRedirectTo,
-          },
+          options: { emailRedirectTo },
         });
-        if (otpErr) {
-          return res.status(400).json({ error: otpErr.message || resendErr.message });
+        if (resendErr) {
+          const msg = resendErr.message || otpErr.message || 'Failed to send verification link.';
+          const status = msg.toLowerCase().includes('rate limit') ? 429 : 400;
+          return res.status(status).json({ error: msg });
         }
       }
 
       return res.json({
         ok: true,
-        message: 'A verification link has been sent to your email inbox.',
+        message: 'A sign-in / verification link has been sent to your email inbox.',
       });
     } catch (err) {
       return res.status(500).json({
@@ -789,83 +792,103 @@ export function createApiApp() {
     .strict();
 
   app.post('/api/ai/analyze', requireConsentedUser, async (req: AuthedRequest, res) => {
-    const isPro = isProSubscriptionActive(req.userProfile);
-    const usage = await getAiUsage(req.userProfile!.id, isPro, req.sbSession?.token);
-
-    if (!usage.allowed) {
-      return res.status(429).json({
-        error:
-          'You have reached your free limit of 5 AI analyses for this 2-day period. Upgrade to Veyra Pro for unlimited analyses, or wait for your limit to reset.',
-        upgradeRequired: true,
-        limit: 5,
-        used: usage.used,
-        resetAt: usage.resetAt,
-      });
-    }
-
-    const rl = checkRateLimit(`ai:${req.userProfile!.id}`, 20, 60 * 1000);
-    if (!rl.allowed) {
-      return res.status(429).json({ error: `Rate limit reached. Try again in ${rl.retryAfterSec}s.` });
-    }
-
-    const parsed = aiPromptSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Enter a market question between 4 and 1200 characters.' });
-    }
-
-    const [strength, fg, liveFiat, liveCrypto] = await Promise.all([
-      buildStrengthLeaderboard(),
-      fetchFearAndGreed(),
-      fetchLiveFiatCurrencies(),
-      fetchLiveCryptoAssets(),
-    ]);
-
-    // Key currency rates vs USD
-    const keyCodes = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AED', 'CAD', 'AUD', 'CHF', 'CNY', 'SGD', 'BRL', 'MXN', 'ZAR', 'SAR', 'KRW'];
-    const keyCurrencies = keyCodes
-      .map((code) => {
-        const found = liveFiat.currencies.find((c) => c.code === code);
-        const rate = liveFiat.rates[code] ?? found?.vsUsdRate;
-        if (!rate) return null;
-        return `${code} (${found?.name || code}): 1 USD = ${rate} (24h: ${found ? `${found.change24h > 0 ? '+' : ''}${found.change24h}%` : 'N/A'}, Strength: ${found?.strengthScore ?? 'N/A'})`;
-      })
-      .filter(Boolean)
-      .join('; ');
-
-    // Full 160+ fiat currency rates dictionary
-    const allFiatRates = Object.entries(liveFiat.rates || {})
-      .map(([code, rate]) => `${code}: ${rate}`)
-      .join(', ');
-
-    const topCrypto = liveCrypto
-      .slice(0, 15)
-      .map((c) => `${c.code}: $${c.price_usd} (24h: ${c.change_24h > 0 ? '+' : ''}${c.change_24h}%)`)
-      .join('; ');
-
-    const snapshot = [
-      `Key Tracked Currencies (vs 1 USD):\n${keyCurrencies}`,
-      `Complete 160+ World Fiat Exchange Rates (1 USD = [Code: Rate]):\n${allFiatRates}`,
-      `Top Cryptocurrency Spot Prices:\n${topCrypto}`,
-      `Fear & Greed Index:\n${fg.current.value} (${fg.current.classification})`,
-    ].join('\n\n');
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
     try {
-      const { fullText, tokensUsed } = await streamMarketAnalysis({
-        query: parsed.data.query,
-        marketSnapshot: snapshot,
-        onChunk: (chunk) => {
-          res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
-        },
-      });
-      const entry = await saveAiAnalysis(req.userProfile!.id, parsed.data.query, fullText, tokensUsed, req.sbSession?.token);
-      res.write(`data: ${JSON.stringify({ done: true, entry })}\n\n`);
-      res.end();
+      const isPro = isProSubscriptionActive(req.userProfile);
+      const usage = await getAiUsage(req.userProfile!.id, isPro, req.sbSession?.token);
+
+      if (!usage.allowed) {
+        return res.status(429).json({
+          error:
+            'You have reached your free limit of 5 AI analyses for this 2-day period. Upgrade to Veyra Pro for unlimited analyses, or wait for your limit to reset.',
+          upgradeRequired: true,
+          limit: 5,
+          used: usage.used,
+          resetAt: usage.resetAt,
+        });
+      }
+
+      const rl = checkRateLimit(`ai:${req.userProfile!.id}`, 20, 60 * 1000);
+      if (!rl.allowed) {
+        return res.status(429).json({ error: `Rate limit reached. Try again in ${rl.retryAfterSec}s.` });
+      }
+
+      const parsed = aiPromptSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Enter a market question between 4 and 1200 characters.' });
+      }
+
+      const [strength, fg, liveFiat, liveCrypto] = await Promise.all([
+        buildStrengthLeaderboard(),
+        fetchFearAndGreed(),
+        fetchLiveFiatCurrencies(),
+        fetchLiveCryptoAssets(),
+      ]);
+
+      // Key currency rates vs USD
+      const keyCodes = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AED', 'CAD', 'AUD', 'CHF', 'CNY', 'SGD', 'BRL', 'MXN', 'ZAR', 'SAR', 'KRW'];
+      const keyCurrencies = keyCodes
+        .map((code) => {
+          const found = liveFiat.currencies.find((c) => c.code === code);
+          const rate = liveFiat.rates[code] ?? found?.rateVsUsd;
+          if (!rate) return null;
+          return `${code} (${found?.name || code}): 1 USD = ${rate} (24h: ${found ? `${found.change24h > 0 ? '+' : ''}${found.change24h}%` : 'N/A'}, Strength: ${found?.strengthScore ?? 'N/A'})`;
+        })
+        .filter(Boolean)
+        .join('; ');
+
+      // Full 160+ fiat currency rates dictionary
+      const allFiatRates = Object.entries(liveFiat.rates || {})
+        .map(([code, rate]) => `${code}: ${rate}`)
+        .join(', ');
+
+      const cryptoCoins = Array.isArray(liveCrypto?.coins) ? liveCrypto.coins : [];
+      const topCrypto = cryptoCoins
+        .slice(0, 15)
+        .map((c) => `${c.symbol}: $${c.current_price} (24h: ${c.price_change_percentage_24h > 0 ? '+' : ''}${c.price_change_percentage_24h}%)`)
+        .join('; ');
+
+      const topStrengthFiat = (strength?.fiat || [])
+        .slice(0, 12)
+        .map((f) => `${f.code} (#${f.rank}, Score ${f.strengthScore}, 1 USD=${f.vsUsdRate}, 24h ${f.change24h}%)`)
+        .join('; ');
+
+      const snapshot = [
+        `Key Tracked Currencies (vs 1 USD):\n${keyCurrencies}`,
+        `Top Strength Index Currencies:\n${topStrengthFiat}`,
+        `Complete 160+ World Fiat Exchange Rates (1 USD = [Code: Rate]):\n${allFiatRates}`,
+        `Top Cryptocurrency Spot Prices:\n${topCrypto}`,
+        `Fear & Greed Index:\n${fg.current.value} (${fg.current.classification})`,
+      ].join('\n\n');
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      if (typeof (res as any).flushHeaders === 'function') {
+        (res as any).flushHeaders();
+      }
+
+      try {
+        const { fullText, tokensUsed } = await streamMarketAnalysis({
+          query: parsed.data.query,
+          marketSnapshot: snapshot,
+          onChunk: (chunk) => {
+            res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+          },
+        });
+        const entry = await saveAiAnalysis(req.userProfile!.id, parsed.data.query, fullText, tokensUsed, req.sbSession?.token);
+        res.write(`data: ${JSON.stringify({ done: true, entry })}\n\n`);
+        res.end();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to generate AI analysis right now.';
+        res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
+        res.end();
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unable to generate AI analysis right now.';
+      const msg = err instanceof Error ? err.message : 'Unable to prepare AI market snapshot.';
+      if (!res.headersSent) {
+        return res.status(500).json({ error: msg });
+      }
       res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
       res.end();
     }
@@ -1018,13 +1041,13 @@ export function createApiApp() {
       return res.json({ ok: true });
     });
 
-    app.get(adminPaths('/overview'), requireHiddenAdmin, async (_req, res) => {
-      const stats = await adminGetOverviewStats();
+    app.get(adminPaths('/overview'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
+      const stats = await adminGetOverviewStats(req.sbSession?.token);
       res.json({ stats, apiHealth: getApiHealthStatuses() });
     });
 
-    app.get(adminPaths('/users'), requireHiddenAdmin, async (_req, res) => {
-      const users = await adminListUsers();
+    app.get(adminPaths('/users'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
+      const users = await adminListUsers(req.sbSession?.token);
       res.json({ users });
     });
 
@@ -1051,6 +1074,7 @@ export function createApiApp() {
       const updated = await adminManageUser({
         targetUserId: targetId,
         action: parsed.data.action,
+        userToken: req.sbSession?.token,
       });
       if (!updated) return res.status(404).json({ error: 'User not found.' });
 
@@ -1062,13 +1086,14 @@ export function createApiApp() {
         details: { email: updated.email },
         ip_address: getClientIp(req),
         user_agent: String(req.headers['user-agent'] || '').slice(0, 240) || null,
+        userToken: req.sbSession?.token,
       });
 
       return res.json({ user: updated });
     });
 
-    app.get(adminPaths('/payments'), requireHiddenAdmin, async (_req, res) => {
-      const payments = await adminListPayments();
+    app.get(adminPaths('/payments'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
+      const payments = await adminListPayments(req.sbSession?.token);
       res.json({ payments });
     });
 
@@ -1095,6 +1120,7 @@ export function createApiApp() {
         action: parsed.data.action,
         adminNote: parsed.data.admin_note,
         adminId: req.userProfile!.id,
+        userToken: req.sbSession?.token,
       });
       if (!result) return res.status(404).json({ error: 'Payment request not found.' });
 
@@ -1110,13 +1136,14 @@ export function createApiApp() {
         },
         ip_address: getClientIp(req),
         user_agent: String(req.headers['user-agent'] || '').slice(0, 240) || null,
+        userToken: req.sbSession?.token,
       });
 
       return res.json(result);
     });
 
-    app.get(adminPaths('/audit-log'), requireHiddenAdmin, async (_req, res) => {
-      const logs = await adminListAuditLogs();
+    app.get(adminPaths('/audit-log'), requireHiddenAdmin, async (req: AuthedRequest, res) => {
+      const logs = await adminListAuditLogs(req.sbSession?.token);
       res.json({ logs });
     });
   }

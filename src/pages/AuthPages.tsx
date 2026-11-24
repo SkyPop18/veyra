@@ -471,12 +471,12 @@ export function LoginPage() {
 
           {otpSent && (
             <div className="rounded-xl border border-[#3b82f6]/30 bg-[#3b82f6]/10 p-3.5 text-xs text-[#09090b] dark:text-[#fafafa] space-y-2">
-              <p>If an account exists for that email, we sent a one-time login code and magic link.</p>
+              <p>If an account exists for that email, we sent a sign-in link to your inbox. Click the link in the email to sign in.</p>
               <Link
-                to={`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}&mode=email`}
+                to={`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}`}
                 className="inline-block font-semibold text-[#2563eb] dark:text-[#60a5fa] hover:underline"
               >
-                Enter 6-digit login code →
+                Open verification status →
               </Link>
             </div>
           )}
@@ -488,7 +488,7 @@ export function LoginPage() {
             disabled={loading || !isSupabaseClientReady}
             className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white font-medium text-sm py-2.5 transition-colors cursor-pointer disabled:opacity-50"
           >
-            {loading ? 'Sending code...' : 'Send Login Code / Magic Link'}
+            {loading ? 'Sending link...' : 'Send Sign-In Link'}
           </button>
         </form>
       )}
@@ -592,8 +592,14 @@ export function RegisterPage() {
         return;
       }
 
-      notify('Check your email for the 6-digit verification code.', 'success');
-      navigate(`/verify-email?email=${encodeURIComponent(cleanEmail)}&mode=signup&consented=1`);
+      // If an account with this email already exists, Supabase returns an empty identities array and sends no signup email
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        setError('An account with this email already exists. Please sign in or use Google Sign-In.');
+        return;
+      }
+
+      notify('Check your email for the verification link.', 'success');
+      navigate(`/verify-email?email=${encodeURIComponent(cleanEmail)}&consented=1`);
     } catch {
       setError('Registration failed. Please try again.');
     } finally {
