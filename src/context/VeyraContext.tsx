@@ -30,6 +30,7 @@ interface VeyraContextValue {
   emailVerified: boolean;
   termsAccepted: boolean;
   aal: 'aal1' | 'aal2';
+  mfaRequired: boolean;
   passwordRecovery: boolean;
   clearPasswordRecovery: () => void;
   authLoading: boolean;
@@ -90,6 +91,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
   const [emailVerified, setEmailVerified] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [aal, setAal] = useState<'aal1' | 'aal2'>('aal1');
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -262,9 +264,16 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
             setEmailVerified(false);
             setTermsAccepted(false);
             setAal('aal1');
+            setMfaRequired(false);
             clearUserData();
             setAuthLoading(false);
             return;
+          }
+          try {
+            const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+            setMfaRequired(Boolean(aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== 'aal2'));
+          } catch {
+            setMfaRequired(false);
           }
         } catch {
           // Timeout or session retrieval issue
@@ -322,6 +331,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
       }
       if (event === 'SIGNED_OUT') {
         setPasswordRecovery(false);
+        setMfaRequired(false);
         setUser(null);
         userRef.current = null;
         setEmailVerified(false);
@@ -362,6 +372,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
     }
     setMemoryAuthToken(null);
     setPasswordRecovery(false);
+    setMfaRequired(false);
     setUser(null);
     userRef.current = null;
     setEmailVerified(false);
@@ -382,6 +393,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
     }
     setMemoryAuthToken(null);
     setPasswordRecovery(false);
+    setMfaRequired(false);
     setUser(null);
     userRef.current = null;
     setEmailVerified(false);
@@ -499,6 +511,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
         emailVerified,
         termsAccepted,
         aal,
+        mfaRequired,
         passwordRecovery,
         clearPasswordRecovery,
         authLoading,
@@ -543,7 +556,7 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
           {toasts.map((t) => (
             <div
               key={t.id}
-              className={`pointer-events-auto rounded-xl px-4 py-3 text-sm font-medium backdrop-blur-xl border shadow-lg transition-all ${
+              className={`pointer-events-auto rounded-xl px-4 py-3 text-sm font-medium border shadow-md transition-colors ${
                 t.tone === 'error'
                   ? 'bg-white/95 dark:bg-[#18181b]/95 border-[#ef4444]/40 text-[#ef4444]'
                   : t.tone === 'success'

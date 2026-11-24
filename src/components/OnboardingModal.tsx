@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Check, Shield, Sparkles, User, X } from 'lucide-react';
+import { Check, Shield, User, X } from 'lucide-react';
 import { useVeyra } from '../context/VeyraContext';
 import { apiRequest } from '../lib/api';
 
 const PRESET_AVATARS = [
-  { id: 'bull', name: 'Cyber Bull', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80' },
-  { id: 'globe', name: 'Forex Globe', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80' },
+  { id: 'bull', name: 'Market Bull', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80' },
+  { id: 'globe', name: 'Global FX', url: 'https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=150&auto=format&fit=crop&q=80' },
   { id: 'analyst', name: 'Quant Analyst', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80' },
   { id: 'macro', name: 'Macro Trader', url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80' },
   { id: 'sovereign', name: 'Sovereign', url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80' },
@@ -99,7 +99,7 @@ export function OnboardingModal() {
 
       await refreshAuth();
       await refreshUserData();
-      notify('Your Veyra profile and initial watchlist have been set up!', 'success');
+      notify('Your Veyra profile and initial watchlist have been saved.', 'success');
       setIsOpen(false);
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not save profile setup.', 'error');
@@ -109,18 +109,17 @@ export function OnboardingModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-      <div className="relative w-full max-w-lg rounded-2xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#0c1017] p-6 sm:p-8 shadow-2xl text-[#09090b] dark:text-[#fafafa] space-y-6 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65">
+      <div className="relative w-full max-w-lg rounded-2xl border border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#11141c] p-6 sm:p-8 shadow-xl text-[#09090b] dark:text-[#fafafa] space-y-6 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#3b82f6]/10 text-[#3b82f6] text-[11px] font-semibold">
-              <Sparkles className="h-3 w-3" />
               <span>First-Time Setup</span>
             </div>
-            <h2 className="font-display text-xl font-bold tracking-tight">Set Up Your Analyst ID</h2>
+            <h2 className="font-display text-xl font-semibold tracking-tight">Set Up Your Analyst Profile</h2>
             <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
-              Customize your profile name, avatar (DP), and initial market watchlist.
+              Customize your profile name, profile picture, and initial market watchlist.
             </p>
           </div>
           <button
@@ -137,7 +136,7 @@ export function OnboardingModal() {
           {/* 1. Profile Picture / Avatar Selection */}
           <div className="space-y-2">
             <label className="block text-xs font-semibold text-[#52525b] dark:text-[#a1a1aa]">
-              Choose Your Profile Avatar (DP)
+              Choose Your Profile Picture
             </label>
             <div className="grid grid-cols-6 gap-2 pt-1">
               {PRESET_AVATARS.map((av) => {
@@ -150,9 +149,9 @@ export function OnboardingModal() {
                       setSelectedAvatar(av.url);
                       setCustomAvatarUrl('');
                     }}
-                    className={`relative rounded-full aspect-square overflow-hidden border-2 transition-all cursor-pointer ${
+                    className={`relative rounded-full aspect-square overflow-hidden border-2 transition-colors cursor-pointer ${
                       isSelected
-                        ? 'border-[#3b82f6] ring-2 ring-[#3b82f6]/40 scale-105'
+                        ? 'border-[#3b82f6] ring-2 ring-[#3b82f6]/40'
                         : 'border-transparent hover:border-[#3b82f6]/50 opacity-80 hover:opacity-100'
                     }`}
                   >

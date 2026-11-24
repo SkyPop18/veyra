@@ -75,85 +75,8 @@ function useHiddenAdmin() {
 const ADMIN_SURFACE =
   'bg-white dark:bg-[#11131a] border border-[#e4e4e7] dark:border-white/10 rounded-2xl';
 
-const SETUP_SQL_SNIPPET = `-- Run in Supabase Dashboard -> SQL Editor to enable Grant Pro / Ban / Payment Approvals & Harden Security
-ALTER TABLE public.profiles
-  ADD COLUMN IF NOT EXISTS pro_expires_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS terms_version TEXT,
-  ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT FALSE;
-
-UPDATE public.profiles
-SET is_admin = TRUE
-WHERE lower(email) IN ('akshatkhushi2020@gmail.com', 'akshatbhopali@gmail.com');
-
-CREATE OR REPLACE FUNCTION public.is_admin()
-RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
-  SELECT COALESCE((SELECT is_admin FROM public.profiles WHERE id = auth.uid()), FALSE);
-$$;
-
-CREATE OR REPLACE FUNCTION public.admin_manage_user_profile(target_user_id UUID, action_name TEXT)
-RETURNS public.profiles LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-DECLARE updated_row public.profiles;
-BEGIN
-  IF NOT public.is_admin() THEN RAISE EXCEPTION 'Administrator privileges required'; END IF;
-  IF COALESCE(auth.jwt() ->> 'aal', 'aal1') <> 'aal2' THEN RAISE EXCEPTION 'AAL2 MFA required'; END IF;
-  IF action_name = 'grant_pro' THEN
-    UPDATE public.profiles SET subscription_tier = 'pro', pro_expires_at = NOW() + INTERVAL '30 days', updated_at = NOW()
-    WHERE id = target_user_id RETURNING * INTO updated_row;
-  ELSIF action_name = 'revoke_pro' THEN
-    UPDATE public.profiles SET subscription_tier = 'free', pro_expires_at = NULL, updated_at = NOW()
-    WHERE id = target_user_id RETURNING * INTO updated_row;
-  ELSIF action_name = 'ban' THEN
-    UPDATE public.profiles SET is_banned = TRUE, is_suspended = TRUE, updated_at = NOW()
-    WHERE id = target_user_id RETURNING * INTO updated_row;
-  ELSIF action_name = 'unban' THEN
-    UPDATE public.profiles SET is_banned = FALSE, is_suspended = FALSE, updated_at = NOW()
-    WHERE id = target_user_id RETURNING * INTO updated_row;
-  ELSE RAISE EXCEPTION 'Invalid action'; END IF;
-  RETURN updated_row;
-END;
-$$;
-REVOKE ALL ON FUNCTION public.admin_manage_user_profile(UUID, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.admin_manage_user_profile(UUID, TEXT) TO authenticated;
-
-CREATE OR REPLACE FUNCTION public.admin_review_payment_request(payment_id UUID, action_name TEXT, note TEXT DEFAULT '')
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-DECLARE pay_row public.payment_requests; user_row public.profiles; expiry TIMESTAMPTZ := NOW() + INTERVAL '30 days';
-BEGIN
-  IF NOT public.is_admin() THEN RAISE EXCEPTION 'Administrator privileges required'; END IF;
-  IF COALESCE(auth.jwt() ->> 'aal', 'aal1') <> 'aal2' THEN RAISE EXCEPTION 'AAL2 MFA required'; END IF;
-  UPDATE public.payment_requests
-  SET status = CASE WHEN action_name = 'approve' THEN 'approved' ELSE 'rejected' END,
-      admin_note = NULLIF(note, ''), notes = NULLIF(note, ''), reviewed_by = auth.uid(),
-      reviewed_at = NOW(), pro_expires_at = CASE WHEN action_name = 'approve' THEN expiry ELSE NULL END, updated_at = NOW()
-  WHERE id = payment_id RETURNING * INTO pay_row;
-  IF pay_row.id IS NULL THEN RETURN NULL; END IF;
-  IF action_name = 'approve' THEN
-    UPDATE public.profiles SET subscription_tier = 'pro', pro_expires_at = expiry, updated_at = NOW()
-    WHERE id = pay_row.user_id RETURNING * INTO user_row;
-  END IF;
-  RETURN jsonb_build_object('payment', to_jsonb(pay_row), 'updatedUser', to_jsonb(user_row));
-END;
-$$;
-REVOKE ALL ON FUNCTION public.admin_review_payment_request(UUID, TEXT, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.admin_review_payment_request(UUID, TEXT, TEXT) TO authenticated;`;
-
 function DatabaseSetupBanner({ onVerified }: { onVerified: () => Promise<void> }) {
-  const { notify } = useVeyra();
-  const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(SETUP_SQL_SNIPPET);
-      setCopied(true);
-      notify('Setup SQL copied. Paste and Run in Supabase SQL Editor.', 'success');
-      window.setTimeout(() => setCopied(false), 2500);
-    } catch {
-      notify('Unable to copy automatically. Copy supabase/migrations/20261125_security_hardening.sql from your repo.', 'error');
-    }
-  };
 
   const handleCheck = async () => {
     setChecking(true);
@@ -167,21 +90,13 @@ function DatabaseSetupBanner({ onVerified }: { onVerified: () => Promise<void> }
         <div className="space-y-1 max-w-2xl">
           <p className="font-semibold text-sm text-amber-600 dark:text-amber-400 flex items-center gap-2">
             <Database className="h-4 w-4 shrink-0" />
-            <span>One-Time Database Setup Needed to Grant Pro / Ban Users</span>
+            <span>Database Write Access Setup Required</span>
           </p>
           <p className="text-[#52525b] dark:text-[#d4d4d8] leading-relaxed">
-            Your deployment does not have <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code> set in Vercel yet, and the admin RPCs are not installed in Postgres. Run the setup SQL once in Supabase SQL Editor (or add <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code> in Vercel Environment Variables).
+            Administrative write permissions are not enabled in the database backend yet. Apply your backend permission configuration and re-verify below.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3.5 py-2 font-semibold cursor-pointer"
-          >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            <span>{copied ? 'SQL Copied!' : 'Copy Setup SQL'}</span>
-          </button>
           <button
             type="button"
             onClick={handleCheck}
@@ -472,7 +387,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
               <div>
                 <h1 className="font-display text-2xl font-bold">Administrator Sign In</h1>
                 <p className="text-xs text-[#71717a] mt-1">
-                  Requires allowlisted email, server-verified admin role, and TOTP authenticator MFA (AAL2).
+                  Requires allowlisted email, server-verified admin role, and authenticator 2FA.
                 </p>
               </div>
 
@@ -525,7 +440,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
                 <p className="text-xs text-[#71717a] mt-1">
                   {step === 'mfa-enroll'
                     ? 'Scan this QR code with Google Authenticator / 1Password / Authy, then enter the 6-digit code.'
-                    : 'Enter the current 6-digit code from your authenticator app to elevate to AAL2.'}
+                    : 'Enter the current 6-digit code from your authenticator app to complete two-factor verification.'}
                 </p>
               </div>
 
@@ -562,7 +477,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
                 disabled={busy || totpCode.length !== 6}
                 className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white py-2.5 text-sm font-semibold cursor-pointer disabled:opacity-50"
               >
-                {busy ? 'Verifying AAL2...' : 'Verify & Unlock Console'}
+                {busy ? 'Verifying 2FA...' : 'Verify & Unlock Console'}
               </button>
             </form>
           )}
@@ -604,7 +519,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
           <div className="space-y-6">
             <div className="px-2">
               <p className="font-display text-lg font-bold">Veyra Ops</p>
-              <p className="text-[11px] text-[#3b82f6] font-medium">AAL2 MFA · 30m Idle Lock</p>
+              <p className="text-[11px] text-[#3b82f6] font-medium">2FA Protected · 30m Idle Lock</p>
             </div>
             <nav className="space-y-1">
               {nav.map((item) => {
@@ -702,7 +617,7 @@ export function AdminShell({ basePath }: { basePath: string }) {
                 <span>Confirm Privileged Action</span>
               </div>
               <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
-                Enter your administrator password, or confirm directly using your active 2FA (AAL2) session.
+                Enter your administrator password, or confirm directly using your active two-factor verification session.
               </p>
               <input
                 type="password"

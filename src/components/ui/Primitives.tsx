@@ -60,16 +60,16 @@ export function StrengthBar({
   const clamped = Math.max(0, Math.min(100, score));
   const toneClass =
     clamped >= 78
-      ? 'from-[#2563eb] to-[#1d4ed8]'
+      ? 'bg-[#2563eb]'
       : clamped >= 58
-        ? 'from-[#3b82f6] to-[#2563eb]'
-        : 'from-[#93c5fd] to-[#60a5fa]';
+        ? 'bg-[#3b82f6]'
+        : 'bg-[#60a5fa]';
 
   return (
     <div className={cn('flex items-center gap-3', compact ? 'w-32' : 'w-full max-w-[200px]')}>
       <div className="h-2 flex-1 rounded-full bg-[#e4e4e7] dark:bg-white/10 overflow-hidden">
         <div
-          className={cn('h-full rounded-full bg-gradient-to-r transition-all duration-500', toneClass)}
+          className={cn('h-full rounded-full transition-[width] duration-300', toneClass)}
           style={{ width: `${clamped}%` }}
         />
       </div>
@@ -159,7 +159,7 @@ export function FearGreedGauge({ value, classification }: { value: number; class
       </div>
       <div className="min-w-0">
         <p className="text-sm font-semibold text-[#09090b] dark:text-[#fafafa] truncate">{classification}</p>
-        <p className="text-xs text-[#71717a] dark:text-[#a1a1aa]">Alternative.me Index</p>
+        <p className="text-xs text-[#71717a] dark:text-[#a1a1aa]">Market Sentiment Index</p>
       </div>
     </div>
   );
@@ -192,7 +192,7 @@ export function PriceTicker() {
   return (
     <div
       aria-label="Live market rates ticker"
-      className="w-full overflow-hidden border-b border-[#e4e4e7] dark:border-white/10 bg-white/75 dark:bg-[#09090b]/85 backdrop-blur-md py-2"
+      className="w-full overflow-hidden border-b border-[#e4e4e7] dark:border-white/8 bg-white dark:bg-[#0b0d14] py-2"
     >
       <div className="animate-veyra-ticker flex items-center gap-8 px-4">
         {doubled.map((item, idx) => (

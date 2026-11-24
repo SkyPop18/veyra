@@ -117,7 +117,7 @@ export function ConverterPage() {
           Currency Rate Converter
         </h1>
         <p className="text-sm text-[#52525b] dark:text-[#a1a1aa] mt-1">
-          Live reference conversion across all {fiat.length} fiat currencies and any CoinGecko cryptocurrency.
+          Live reference conversion across all {fiat.length} fiat currencies and tracked cryptocurrencies.
         </p>
       </div>
 
@@ -179,7 +179,7 @@ export function ConverterPage() {
               type="search"
               value={coinSearch}
               onChange={(e) => setCoinSearch(e.target.value)}
-              placeholder="Need another coin? Search full 10,000+ CoinGecko catalog..."
+              placeholder="Search tracked cryptocurrencies..."
               aria-label="Search full cryptocurrency catalog for converter"
               className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/80 dark:bg-[#09090b] pl-9 pr-3 py-2 text-xs focus:outline-none focus:border-[#3b82f6]"
             />

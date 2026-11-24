@@ -85,7 +85,7 @@ function NotFoundPage() {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, emailVerified, authLoading } = useVeyra();
+  const { user, emailVerified, mfaRequired, authLoading } = useVeyra();
 
   // Display clean non-hanging loader only while cold booting before user session is determined
   if (authLoading && !user) {
@@ -98,6 +98,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
   if (!user && !authLoading) {
     return <Navigate to="/login" replace />;
+  }
+  if (mfaRequired && user) {
+    return <Navigate to="/login?mfa=1" replace />;
   }
   if (!emailVerified && user) {
     return <Navigate to={`/verify-email?email=${encodeURIComponent(user.email)}&mode=signup`} replace />;

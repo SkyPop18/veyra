@@ -248,14 +248,9 @@ async function runGoogleOAuthFlow(params: {
 // ── 1. Login Page (Email+Password, Email OTP / Magic Link, and Real Google OAuth) ──
 
 export function LoginPage() {
-  const { user, authLoading, notify, refreshAuth } = useVeyra();
+  const { user, mfaRequired, authLoading, notify, refreshAuth, logout } = useVeyra();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (user && !authLoading) {
-      navigate('/dashboard/home', { replace: true });
-    }
-  }, [user, authLoading, navigate]);
 
   const [mode, setMode] = useState<'password' | 'otp'>('password');
   const [email, setEmail] = useState('');
@@ -264,10 +259,85 @@ export function LoginPage() {
   const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [verifyingMfa, setVerifyingMfa] = useState(false);
+
+  useEffect(() => {
+    if (user && !authLoading && !mfaRequired && !mfaFactorId && searchParams.get('mfa') !== '1') {
+      navigate('/dashboard/home', { replace: true });
+    }
+  }, [user, mfaRequired, mfaFactorId, authLoading, navigate, searchParams]);
+
+  useEffect(() => {
+    if (!supabase || !user) return;
+    if (mfaRequired || searchParams.get('mfa') === '1') {
+      void supabase.auth.mfa.listFactors().then(({ data }) => {
+        const verified = (data?.totp || []).find((f) => f.status === 'verified');
+        if (verified) {
+          setMfaFactorId(verified.id);
+        }
+      });
+    }
+  }, [user, mfaRequired, searchParams]);
+
+  const checkMfaGate = async (): Promise<boolean> => {
+    if (!supabase) return false;
+    const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== 'aal2') {
+      const { data: factors } = await supabase.auth.mfa.listFactors();
+      const verified = (factors?.totp || []).find((f) => f.status === 'verified');
+      if (verified) {
+        setMfaFactorId(verified.id);
+        setMfaCode('');
+        await refreshAuth();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const handleVerifyMfaLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase || !mfaFactorId) return;
+    const clean = mfaCode.replace(/\D/g, '');
+    if (clean.length !== 6) {
+      setError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+    setError('');
+    setVerifyingMfa(true);
+    try {
+      const { data: ch, error: chErr } = await supabase.auth.mfa.challenge({ factorId: mfaFactorId });
+      if (chErr || !ch) {
+        setError(chErr?.message || 'Unable to start two-factor verification.');
+        return;
+      }
+      const { error: verErr } = await supabase.auth.mfa.verify({
+        factorId: mfaFactorId,
+        challengeId: ch.id,
+        code: clean,
+      });
+      if (verErr) {
+        setError(verErr.message || 'Invalid 6-digit code.');
+        return;
+      }
+      setMfaFactorId(null);
+      setMfaCode('');
+      await refreshAuth();
+      notify('Welcome back to Veyra.', 'success');
+      navigate('/dashboard/home', { replace: true });
+    } catch {
+      setError('Verification failed. Confirm your device clock and try again.');
+    } finally {
+      setVerifyingMfa(false);
+    }
+  };
+
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabase) {
-      setError('Supabase Auth is not configured.');
+      setError('Authentication service is unavailable.');
       return;
     }
     setError('');
@@ -285,6 +355,9 @@ export function LoginPage() {
         setError('Invalid email or password.');
         return;
       }
+      if (await checkMfaGate()) {
+        return;
+      }
       await refreshAuth();
       notify('Welcome back to Veyra.', 'success');
       navigate('/dashboard/home');
@@ -298,7 +371,7 @@ export function LoginPage() {
   const handleOtpLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabase) {
-      setError('Supabase Auth is not configured.');
+      setError('Authentication service is unavailable.');
       return;
     }
     setError('');
@@ -338,6 +411,9 @@ export function LoginPage() {
         } catch {
           // ignore
         }
+        if (await checkMfaGate()) {
+          return;
+        }
         await refreshAuth();
         notify('Welcome back to Veyra.', 'success');
         navigate('/dashboard/home', { replace: true });
@@ -346,6 +422,59 @@ export function LoginPage() {
       onDone: () => setLoading(false),
     });
   };
+
+  if (mfaFactorId) {
+    return (
+      <AuthLayout
+        title="Two-factor verification"
+        subtitle="Enter the 6-digit code from your authenticator app to finish signing in."
+      >
+        <form onSubmit={handleVerifyMfaLogin} className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="login-mfa-code" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+              6-Digit Authenticator Code
+            </label>
+            <input
+              id="login-mfa-code"
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              required
+              autoFocus
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="000000"
+              className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 font-mono-num text-lg tracking-[0.35em] text-center focus:outline-none focus:border-[#3b82f6]"
+            />
+          </div>
+
+          {error && <p role="alert" className="text-xs font-medium text-[#ef4444]">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={verifyingMfa || mfaCode.length !== 6}
+            className="w-full rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white font-medium text-sm py-2.5 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {verifyingMfa ? 'Verifying...' : 'Verify & Sign In'}
+          </button>
+
+          <button
+            type="button"
+            onClick={async () => {
+              setMfaFactorId(null);
+              setMfaCode('');
+              setError('');
+              await logout();
+              navigate('/login', { replace: true });
+            }}
+            className="w-full text-center text-xs text-[#52525b] dark:text-[#a1a1aa] hover:underline cursor-pointer"
+          >
+            Cancel and use a different account
+          </button>
+        </form>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout
@@ -558,7 +687,7 @@ export function RegisterPage() {
       return;
     }
     if (!supabase) {
-      setError('Supabase Auth is not configured.');
+      setError('Authentication service is unavailable.');
       return;
     }
 
@@ -877,7 +1006,7 @@ export function VerifyEmailPage() {
         </button>
 
         <p className="text-[11px] text-[#71717a] text-center">
-          Server enforced 30s rate limit applies. Remember to check your Spam or Promotions folder.
+          Please wait 30 seconds between resend requests, and check your Spam or Promotions folder.
         </p>
 
         <div className="pt-2 border-t border-[#e4e4e7] dark:border-white/10 text-center">
@@ -967,6 +1096,15 @@ export function AuthCallbackPage() {
           });
         } catch {
           // Non-blocking
+        }
+
+        const { data: aalData } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== 'aal2') {
+          await refreshAuth();
+          if (active) {
+            navigate('/login?mfa=1', { replace: true });
+          }
+          return;
         }
 
         await refreshAuth();

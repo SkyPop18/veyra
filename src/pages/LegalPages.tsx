@@ -15,7 +15,7 @@ function LegalShell({
 }) {
   return (
     <div className="min-h-screen veyra-bg text-[#09090b] dark:text-[#fafafa]">
-      <header className="border-b border-[#e4e4e7] dark:border-white/10 bg-white/80 dark:bg-[#09090b]/80 backdrop-blur-xl sticky top-0 z-30">
+      <header className="border-b border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#0b0d14] sticky top-0 z-30">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <Link
             to="/"
@@ -106,7 +106,7 @@ export function PrivacyPolicyPage() {
                 <td className="py-3 px-4">180 days (rolling window) or until account deletion</td>
               </tr>
               <tr>
-                <td className="py-3 px-4 font-medium text-[#09090b] dark:text-white">AI Analysis Queries (Pro)</td>
+                <td className="py-3 px-4 font-medium text-[#09090b] dark:text-white">AI Analysis Queries</td>
                 <td className="py-3 px-4">Your prompts, generated market analysis responses, and token count</td>
                 <td className="py-3 px-4">Delivering AI research and showing your recent chat history</td>
                 <td className="py-3 px-4">90 days (rolling window) or until account deletion</td>
@@ -147,8 +147,8 @@ export function PrivacyPolicyPage() {
         <p>We rely on trusted infrastructure providers strictly to operate Veyra:</p>
         <ul className="list-disc pl-5 space-y-1.5">
           <li><strong>Cloud Infrastructure &amp; Security</strong> — Encrypted authentication, session protection, and resilient database storage.</li>
-          <li><strong>AI Intelligence Engine</strong> — Processes Pro tier market intelligence prompts on secure servers (no personal account data is transmitted).</li>
-          <li><strong>ExchangeRate-API, CoinGecko &amp; Alternative.me</strong> — Live public fiat rates, cryptocurrency prices, and sentiment indices.</li>
+          <li><strong>AI Intelligence Engine</strong> — Processes market intelligence prompts on secure servers (no personal account data is transmitted).</li>
+          <li><strong>Market Data Providers</strong> — Live public fiat exchange rates, cryptocurrency prices, and sentiment indices.</li>
           <li><strong>Discord</strong> — Only used if you voluntarily link your Discord account or run Veyra bot commands.</li>
         </ul>
       </section>

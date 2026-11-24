@@ -23,31 +23,23 @@
   }
 }
 
-/* Veyra strictly enforced White · Black · Gray · Blue ambient radial backdrop (GPU-friendly, zero layout repaints) */
+/* Veyra stepped Ink / Light surface system */
 .veyra-bg {
   background-color: #fafafa;
-  background-image:
-    radial-gradient(ellipse 65% 48% at 18% 12%, rgba(59, 130, 246, 0.08) 0%, transparent 62%),
-    radial-gradient(ellipse 52% 45% at 84% 20%, rgba(37, 99, 235, 0.06) 0%, transparent 60%),
-    radial-gradient(ellipse 55% 40% at 50% 95%, rgba(96, 165, 250, 0.05) 0%, transparent 60%);
-  transition: background-color 250ms ease, color 250ms ease;
+  transition: background-color 180ms cubic-bezier(0.22, 1, 0.36, 1), color 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .dark .veyra-bg {
-  background-color: #09090b;
-  background-image:
-    radial-gradient(ellipse 58% 46% at 52% 18%, rgba(37, 99, 235, 0.16) 0%, transparent 62%),
-    radial-gradient(ellipse 46% 40% at 84% 26%, rgba(59, 130, 246, 0.11) 0%, transparent 58%),
-    radial-gradient(ellipse 50% 40% at 15% 88%, rgba(29, 78, 216, 0.07) 0%, transparent 60%);
+  background-color: #0b0d14;
 }
 
-/* Frosted glass single-elevation surfaces */
+/* Raised cards with subtle hairline borders */
 .glass-surface {
-  @apply backdrop-blur-xl bg-white/85 dark:bg-[#18181b]/78 border border-[#e4e4e7] dark:border-white/10 rounded-2xl transition-colors duration-200;
+  @apply bg-white dark:bg-[#11141c] border border-[#e4e4e7] dark:border-white/8 rounded-2xl transition-colors duration-150;
 }
 
 .glass-surface-hover {
-  @apply backdrop-blur-xl bg-white/85 dark:bg-[#18181b]/78 border border-[#e4e4e7] dark:border-white/10 rounded-2xl transition-all duration-200 hover:border-[#3b82f6]/40 dark:hover:border-[#3b82f6]/45 hover:bg-white dark:hover:bg-[#18181b]/90;
+  @apply bg-white dark:bg-[#11141c] border border-[#e4e4e7] dark:border-white/8 rounded-2xl transition-colors duration-150 hover:border-[#3b82f6]/45 dark:hover:border-[#3b82f6]/45 hover:bg-[#fafafa] dark:hover:bg-[#151924];
 }
 
 /* Tilted 3D perspective showcase for Landing Page hero tablet */

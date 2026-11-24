@@ -17,7 +17,6 @@ import {
   PanelLeftOpen,
   Scale,
   Settings,
-  Sparkles,
   Star,
   Trophy,
   X,
@@ -50,7 +49,7 @@ const PERSONAL_NAV: NavItem[] = [
   { label: 'Price Alerts', to: '/dashboard/alerts', icon: Bell },
   { label: 'News Feed', to: '/dashboard/news', icon: Newspaper },
   { label: 'Saved News', to: '/dashboard/news/saved', icon: Bookmark },
-  { label: 'AI Analysis', to: '/dashboard/ai-analysis', icon: Sparkles },
+  { label: 'AI Analysis', to: '/dashboard/ai-analysis', icon: Activity },
   { label: 'Settings', to: '/dashboard/settings', icon: Settings, matchPrefix: true },
 ];
 
@@ -168,9 +167,6 @@ export function DashboardShell() {
                   <Icon className="h-4 w-4 shrink-0" />
                   <span>{item.label}</span>
                 </span>
-                {item.to === '/dashboard/ai-analysis' && !isPro && (
-                  <span className="text-[11px] font-medium text-[#3b82f6]">Pro</span>
-                )}
               </Link>
             );
           })}

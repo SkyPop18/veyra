@@ -15,7 +15,6 @@ import {
   ExternalLink,
   Plus,
   RefreshCw,
-  Sparkles,
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react';
@@ -143,7 +142,7 @@ export function DashboardHomePage() {
               classification={fearGreed.current.classification}
             />
           ) : (
-            <div className="h-14 rounded-lg bg-[#f4f4f5] dark:bg-white/5 animate-pulse" />
+            <div className="h-14 rounded-lg bg-[#f4f4f5] dark:bg-white/5" />
           )}
         </div>
 
@@ -168,7 +167,7 @@ export function DashboardHomePage() {
               <Sparkline data={topMover.sparkline} positive={topMover.price_change_percentage_24h >= 0} width={76} height={28} />
             </div>
           ) : (
-            <div className="h-12 rounded-lg bg-[#f4f4f5] dark:bg-white/5 animate-pulse" />
+            <div className="h-12 rounded-lg bg-[#f4f4f5] dark:bg-white/5" />
           )}
         </div>
 
@@ -190,7 +189,7 @@ export function DashboardHomePage() {
               </p>
             </div>
           ) : (
-            <div className="h-12 rounded-lg bg-[#f4f4f5] dark:bg-white/5 animate-pulse" />
+            <div className="h-12 rounded-lg bg-[#f4f4f5] dark:bg-white/5" />
           )}
         </div>
 
@@ -363,11 +362,11 @@ export function DashboardHomePage() {
           <div className="flex items-start justify-between gap-3 border-b border-[#e4e4e7] dark:border-white/10 pb-3.5">
             <div>
               <h2 className="font-display text-base font-semibold text-[#09090b] dark:text-white flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-[#3b82f6]" />
+                <Bookmark className="h-4 w-4 text-[#3b82f6]" />
                 <span>Suggested For You</span>
               </h2>
               <p className="text-xs text-[#71717a] dark:text-[#a1a1aa]">
-                Ranked via {suggestEngine === 'gemini' ? 'Gemini AI' : 'your interest graph'}
+                Ranked via {suggestEngine === 'gemini' ? 'Veyra AI' : 'your interest graph'}
               </p>
             </div>
             <button

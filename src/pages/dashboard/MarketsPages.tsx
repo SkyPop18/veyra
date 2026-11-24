@@ -377,7 +377,7 @@ export function CryptoListPage() {
             Cryptocurrency Markets
           </h1>
           <p className="text-sm text-[#52525b] dark:text-[#a1a1aa] mt-1">
-            Paginated live CoinGecko markets + full catalog search across {catalogSize > 0 ? catalogSize.toLocaleString() : '10,000+'} coins.
+            Paginated live crypto markets and full catalog search across {catalogSize > 0 ? catalogSize.toLocaleString() : '10,000+'} assets.
           </p>
         </div>
         <div className="relative max-w-sm w-full">
@@ -386,9 +386,9 @@ export function CryptoListPage() {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search any CoinGecko coin (BTC, SOL, PEPE...)"
+            placeholder="Search cryptocurrencies (BTC, SOL, PEPE)"
             aria-label="Search cryptocurrencies"
-            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/85 dark:bg-[#18181b]/75 pl-10 pr-4 py-2 text-sm text-[#09090b] dark:text-white focus:outline-none focus:border-[#3b82f6]"
+            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#11141c] pl-10 pr-4 py-2 text-sm text-[#09090b] dark:text-white focus:outline-none focus:border-[#3b82f6]"
           />
         </div>
       </div>
@@ -398,7 +398,7 @@ export function CryptoListPage() {
         <div className="glass-surface p-4 space-y-2.5">
           <div className="flex items-center justify-between text-xs text-[#71717a]">
             <span className="font-semibold text-[#09090b] dark:text-white">
-              Global CoinGecko Catalog Matches
+              Global Catalog Matches
             </span>
             {searchingCatalog && <Loader2 className="h-3.5 w-3.5 animate-spin text-[#3b82f6]" />}
           </div>
@@ -551,7 +551,7 @@ export function CryptoDetailPage() {
   if (loadingCoin && !coin) {
     return (
       <div className="glass-surface p-10 text-center text-sm text-[#71717a]">
-        Loading live CoinGecko market data...
+        Loading live cryptocurrency market data...
       </div>
     );
   }

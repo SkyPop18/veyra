@@ -67,23 +67,41 @@ export function SettingsLayout() {
 }
 
 function ChangePasswordCard() {
-  const { notify } = useVeyra();
+  const { user, notify } = useVeyra();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState('');
 
+  const closeModal = () => {
+    setModalOpen(false);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setError('');
+  };
+
   const handlePasswordUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!currentPassword) {
+      setError('Enter your current password.');
+      return;
+    }
     if (!isValidPassword(newPassword)) {
-      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`);
+      setError(`New password must be at least ${MIN_PASSWORD_LENGTH} characters long.`);
       return;
     }
     if (newPassword !== confirmPassword) {
       setError('New passwords do not match.');
       return;
     }
-    if (!supabase) {
+    if (newPassword === currentPassword) {
+      setError('New password must be different from your current password.');
+      return;
+    }
+    if (!supabase || !user?.email) {
       setError('Authentication client is unavailable.');
       return;
     }
@@ -91,13 +109,22 @@ function ChangePasswordCard() {
     setError('');
     setUpdating(true);
     try {
+      // Verify current password before applying the password change
+      const { error: verifyErr } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: currentPassword,
+      });
+      if (verifyErr) {
+        setError('Current password is incorrect.');
+        return;
+      }
+
       const { error: updErr } = await supabase.auth.updateUser({ password: newPassword });
       if (updErr) {
         setError(updErr.message);
         return;
       }
-      setNewPassword('');
-      setConfirmPassword('');
+      closeModal();
       notify('Password updated successfully.', 'success');
     } catch {
       setError('Unable to update password right now.');
@@ -107,63 +134,128 @@ function ChangePasswordCard() {
   };
 
   return (
-    <form onSubmit={handlePasswordUpdate} className="glass-surface p-6 space-y-4">
-      <div className="space-y-1">
-        <h2 className="font-display text-base font-semibold flex items-center gap-2">
-          <KeyRound className="h-4 w-4 text-[#3b82f6]" />
-          <span>Change Password</span>
-        </h2>
-        <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
-          Set a new password for your Veyra account (minimum {MIN_PASSWORD_LENGTH} characters).
-        </p>
+    <>
+      <div className="glass-surface p-6 flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h2 className="font-display text-base font-semibold flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-[#3b82f6]" />
+            <span>Change Password</span>
+          </h2>
+          <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
+            Verify your current password to set a new password (minimum {MIN_PASSWORD_LENGTH} characters).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setModalOpen(true)}
+          className="rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2 text-xs font-semibold cursor-pointer"
+        >
+          Change Password
+        </button>
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <label htmlFor="sec-new-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            New Password
-          </label>
-          <input
-            id="sec-new-pass"
-            type="password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            autoComplete="new-password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            placeholder={`Min ${MIN_PASSWORD_LENGTH} characters`}
-            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
-          />
+      {modalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="change-password-modal-title"
+        >
+          <form
+            onSubmit={handlePasswordUpdate}
+            className="w-full max-w-md rounded-2xl border border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#11141c] p-6 space-y-4 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h3 id="change-password-modal-title" className="font-display text-base font-semibold">
+                  Change Password
+                </h3>
+                <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
+                  Enter your current password and choose a new password.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeModal}
+                className="text-xs text-[#71717a] hover:text-[#09090b] dark:hover:text-white px-2 py-1 rounded-lg cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="sec-cur-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+                Current Password
+              </label>
+              <input
+                id="sec-cur-pass"
+                type="password"
+                required
+                autoFocus
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="sec-new-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+                New Password
+              </label>
+              <input
+                id="sec-new-pass"
+                type="password"
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder={`Min ${MIN_PASSWORD_LENGTH} characters`}
+                className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="sec-confirm-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
+                Confirm New Password
+              </label>
+              <input
+                id="sec-confirm-pass"
+                type="password"
+                required
+                minLength={MIN_PASSWORD_LENGTH}
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter new password"
+                className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
+              />
+            </div>
+
+            {error && <p role="alert" className="text-xs font-medium text-[#ef4444]">{error}</p>}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded-lg border border-[#e4e4e7] dark:border-white/15 px-4 py-2 text-xs font-medium cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={updating}
+                className="rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2 text-xs font-semibold cursor-pointer disabled:opacity-60"
+              >
+                {updating ? 'Updating...' : 'Reset Password'}
+              </button>
+            </div>
+          </form>
         </div>
-
-        <div className="space-y-1.5">
-          <label htmlFor="sec-confirm-pass" className="block text-xs font-medium text-[#52525b] dark:text-[#a1a1aa]">
-            Confirm New Password
-          </label>
-          <input
-            id="sec-confirm-pass"
-            type="password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            autoComplete="new-password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            placeholder="Re-enter new password"
-            className="w-full rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white dark:bg-[#09090b] px-3.5 py-2.5 text-sm"
-          />
-        </div>
-      </div>
-
-      {error && <p role="alert" className="text-xs font-medium text-[#ef4444]">{error}</p>}
-
-      <button
-        type="submit"
-        disabled={updating}
-        className="rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white px-4 py-2 text-xs font-semibold cursor-pointer disabled:opacity-60"
-      >
-        {updating ? 'Updating Password...' : 'Update Password'}
-      </button>
-    </form>
+      )}
+    </>
   );
 }
 
@@ -824,7 +916,7 @@ export function GeneralSettingsPage() {
             <span>Active Sessions &amp; Security</span>
           </h2>
           <p className="text-xs text-[#52525b] dark:text-[#a1a1aa]">
-            Revoke all active Supabase login sessions across every browser and device immediately.
+            Revoke all active login sessions across every browser and device immediately.
           </p>
         </div>
         <button

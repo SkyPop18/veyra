@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
+  BarChart2,
   Check,
   ExternalLink,
   Mail,
   MessageSquare,
-  Sparkles,
   TrendingUp,
 } from 'lucide-react';
 import { useVeyra } from '../context/VeyraContext';
@@ -26,11 +26,11 @@ export function LandingPage() {
   return (
     <div className="min-h-screen veyra-bg text-[#09090b] dark:text-[#fafafa] flex flex-col">
       {/* Top Navbar */}
-      <header className="sticky top-0 z-40 border-b border-[#e4e4e7]/80 dark:border-white/10 bg-white/85 dark:bg-[#09090b]/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 border-b border-[#e4e4e7] dark:border-white/8 bg-white dark:bg-[#0b0d14]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <Link
             to="/"
-            className="font-display text-lg font-extrabold tracking-tight text-[#09090b] dark:text-white inline-flex items-center gap-1.5 shrink-0"
+            className="font-display text-lg font-semibold tracking-tight text-[#09090b] dark:text-white inline-flex items-center gap-1.5 shrink-0"
           >
             <span>VEYRA</span>
             <span className="h-1.5 w-1.5 rounded-full bg-[#3b82f6]" aria-hidden="true" />
@@ -93,17 +93,17 @@ export function LandingPage() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 grid lg:grid-cols-12 gap-10 lg:gap-8 items-center">
             {/* Left Copy */}
             <div className="lg:col-span-5 space-y-6">
-              <h1 className="font-display text-4xl sm:text-5xl lg:text-[3.4rem] font-extrabold tracking-tight leading-[1.06] text-[#09090b] dark:text-white">
-                Track Every Currency. Analyze Every Move.
+              <h1 className="font-display text-4xl sm:text-5xl lg:text-[3.4rem] font-semibold tracking-tight leading-[1.06] text-[#09090b] dark:text-white">
+                Track every currency, compare every move
               </h1>
               <p className="text-base text-[#52525b] dark:text-[#a1a1aa] leading-relaxed max-w-lg">
-                Real-time view-only intelligence across {fiat.length || 160}+ fiat currencies and thousands of cryptocurrencies. Rank relative strength, compare benchmarks, and track macro news — zero trading noise.
+                Live exchange rates, normalized strength rankings, and macro news across {fiat.length || 160}+ fiat currencies and major digital assets—built strictly for market observation, not trading.
               </p>
 
               <div className="flex flex-wrap items-center gap-3 pt-1">
                 <Link
                   to={user ? '/dashboard/home' : '/register'}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white px-5 py-3 text-sm font-semibold transition-colors whitespace-nowrap shadow-[0_8px_28px_-6px_rgba(59,130,246,0.55)]"
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white px-5 py-3 text-sm font-semibold transition-colors whitespace-nowrap"
                 >
                   <span>Launch Dashboard</span>
                 </Link>
@@ -116,20 +116,14 @@ export function LandingPage() {
               </div>
             </div>
 
-            {/* Right Tilted 3D Frosted-Glass Dashboard Tablet Showcase */}
+            {/* Right Tilted 3D Dashboard Tablet Showcase */}
             <div className="lg:col-span-7 relative hero-tablet-stage">
-              {/* Soft radial blue ambient glow behind the tablet */}
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute -inset-6 rounded-[2.5rem] bg-[radial-gradient(ellipse_at_center,rgba(59,130,246,0.28)_0%,rgba(29,78,216,0.1)_45%,transparent_72%)] blur-2xl"
-              />
-
-              <div className="relative hero-tablet-3d rounded-[1.5rem] border border-[#d4d4d8] dark:border-white/15 bg-white/90 dark:bg-[#11131a]/92 backdrop-blur-2xl shadow-[0_28px_80px_-20px_rgba(0,0,0,0.55)] overflow-hidden p-3.5 sm:p-4">
+              <div className="relative hero-tablet-3d rounded-2xl border border-[#d4d4d8] dark:border-white/10 bg-white dark:bg-[#11141c] shadow-[0_18px_48px_-16px_rgba(0,0,0,0.45)] overflow-hidden p-3.5 sm:p-4">
                 <div className="grid grid-cols-12 gap-3">
                   {/* Mini Tablet Sidebar */}
                   <div className="hidden sm:flex sm:col-span-3 flex-col justify-between rounded-xl bg-[#f4f4f5]/90 dark:bg-white/[0.04] border border-[#e4e4e7]/80 dark:border-white/8 p-3">
                     <div className="space-y-3">
-                      <div className="flex items-center gap-1.5 font-display text-xs font-extrabold tracking-tight">
+                      <div className="flex items-center gap-1.5 font-display text-xs font-semibold tracking-tight">
                         <span>VEYRA</span>
                         <span className="h-1.5 w-1.5 rounded-full bg-[#3b82f6]" />
                       </div>
@@ -361,13 +355,13 @@ export function LandingPage() {
             <div className="glass-surface-hover p-6 flex flex-col justify-between gap-5">
               <div>
                 <div className="flex items-center justify-between">
-                  <h2 className="font-display text-base font-bold text-[#09090b] dark:text-white">
+                  <h2 className="font-display text-base font-semibold text-[#09090b] dark:text-white">
                     AI Market Insights
                   </h2>
-                  <Sparkles className="h-4 w-4 text-[#3b82f6]" />
+                  <BarChart2 className="h-4 w-4 text-[#3b82f6]" />
                 </div>
                 <p className="text-xs text-[#71717a] dark:text-[#a1a1aa] mt-1">
-                  Streaming macro &amp; multi-pair synthesis grounded in live Veyra snapshots (Pro).
+                  Streaming macro &amp; multi-pair synthesis grounded in live Veyra snapshots.
                 </p>
               </div>
               <div className="rounded-xl bg-[#f4f4f5]/80 dark:bg-black/35 border border-[#e4e4e7]/80 dark:border-white/10 p-3.5">
@@ -503,11 +497,11 @@ export function LandingPage() {
         <section id="pricing" className="py-16 border-t border-[#e4e4e7]/70 dark:border-white/10">
           <div className="max-w-5xl mx-auto px-4 sm:px-6 space-y-10">
             <div className="text-center max-w-2xl mx-auto space-y-2">
-              <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight">
+              <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight">
                 Transparent Plans. Zero Card Storage.
               </h2>
               <p className="text-sm text-[#52525b] dark:text-[#a1a1aa]">
-                Every core market tool is free forever. Upgrade to Pro for streaming AI market analysis.
+                Core market tools and 5 AI analyses every 2 days are free. Upgrade to Pro for unlimited AI market analysis.
               </p>
             </div>
 
@@ -516,18 +510,18 @@ export function LandingPage() {
               <div className="glass-surface p-7 flex flex-col justify-between gap-6">
                 <div className="space-y-4">
                   <div>
-                    <h3 className="font-display text-lg font-bold">Veyra Free</h3>
+                    <h3 className="font-display text-lg font-semibold">Veyra Free</h3>
                     <p className="mt-1 flex items-baseline gap-1">
-                      <span className="font-mono-num text-3xl font-extrabold">₹0</span>
+                      <span className="font-mono-num text-3xl font-semibold">₹0</span>
                       <span className="text-xs text-[#71717a]">/ forever</span>
                     </p>
                   </div>
                   <ul className="space-y-2.5 text-sm text-[#52525b] dark:text-[#a1a1aa]">
                     {[
                       'All 160+ fiat currencies with live USD rates & flags',
-                      '10,000+ searchable CoinGecko cryptocurrency catalog',
+                      '10,000+ searchable cryptocurrency catalog',
                       'Currency Strength Leaderboard & Regional Heatmap',
-                      'Head-to-Head Compare & View-Only Rate Converter',
+                      '5 AI market analyses every 2 days with live charts',
                       'Personal Watchlist, Price Alerts & Personalized News',
                     ].map((feat) => (
                       <li key={feat} className="flex items-start gap-2.5">
@@ -550,11 +544,11 @@ export function LandingPage() {
               <div className="glass-surface p-7 border-[#3b82f6]/45 flex flex-col justify-between gap-6 relative">
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="font-display text-lg font-bold">Veyra Pro</h3>
+                    <h3 className="font-display text-lg font-semibold">Veyra Pro</h3>
                     <span className="text-xs font-semibold text-[#3b82f6]">Manual Activation</span>
                   </div>
                   <p className="flex items-baseline gap-1">
-                    <span className="font-mono-num text-3xl font-extrabold">₹200</span>
+                    <span className="font-mono-num text-3xl font-semibold">₹200</span>
                     <span className="text-xs text-[#71717a]">/ month</span>
                   </p>
                   <p className="text-xs font-medium text-[#09090b] dark:text-[#fafafa]">
@@ -563,7 +557,7 @@ export function LandingPage() {
                   <ul className="space-y-2.5 text-sm text-[#52525b] dark:text-[#a1a1aa]">
                     {[
                       'Everything in Veyra Free',
-                      'Streaming AI Market Analysis grounded in live rates',
+                      'Unlimited AI Market Analysis grounded in live rates',
                       'Saved AI research history & multi-pair briefings',
                       'Discord bot /analyze command access',
                       'No recurring auto-debit or credit card storage',

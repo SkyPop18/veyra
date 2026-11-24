@@ -249,7 +249,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   return (
     <div className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-[#09090b] text-[#fafafa] overflow-hidden text-xs">
       <div className="flex items-center justify-between px-3.5 py-1.5 bg-white/5 border-b border-white/10 text-[11px] text-[#a1a1aa]">
-        <span className="font-mono uppercase">{lang || 'CODE'}</span>
+        <span className="font-mono">{lang || 'code'}</span>
         <button
           type="button"
           onClick={handleCopy}
@@ -438,7 +438,7 @@ export function MarkdownView({ content, className = '' }: MarkdownViewProps) {
           key={blockKey}
           className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/60 dark:bg-white/[0.03] p-4 flex items-center gap-2 text-xs text-[#71717a]"
         >
-          <BarChart3 className="h-4 w-4 text-[#3b82f6] animate-pulse" />
+          <BarChart3 className="h-4 w-4 text-[#3b82f6]" />
           <span>Rendering interactive market chart...</span>
         </div>
       );

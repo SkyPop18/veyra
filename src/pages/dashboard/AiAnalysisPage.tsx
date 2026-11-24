@@ -7,7 +7,6 @@ import {
   PlusCircle,
   RotateCcw,
   Send,
-  Sparkles,
 } from 'lucide-react';
 import { useVeyra } from '../../context/VeyraContext';
 import { isProSubscriptionActive } from '../../lib/core';
@@ -299,8 +298,8 @@ export function AiAnalysisPage() {
         {/* Header with Usage Status */}
         <div className="px-6 py-4 border-b border-[#e4e4e7] dark:border-white/10 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="font-display text-lg font-bold text-[#09090b] dark:text-white flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-[#3b82f6]" />
+            <h1 className="font-display text-lg font-semibold text-[#09090b] dark:text-white flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-[#3b82f6]" />
               <span>Veyra AI Market Analyst</span>
             </h1>
             <p className="text-xs text-[#71717a] dark:text-[#a1a1aa]">
@@ -397,8 +396,8 @@ export function AiAnalysisPage() {
                       <MarkdownView content={msg.text} />
                     ) : (
                       <span className="italic text-[#71717a] dark:text-[#a1a1aa] flex items-center gap-2 text-xs">
-                        <span className="h-2 w-2 rounded-full bg-[#3b82f6] animate-pulse" />
-                        <span>Synthesizing live currency data &amp; telemetry...</span>
+                        <span className="h-2 w-2 rounded-full bg-[#3b82f6]" />
+                        <span>Synthesizing live currency data...</span>
                       </span>
                     )}
                   </div>
