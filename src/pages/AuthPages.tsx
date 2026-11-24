@@ -103,6 +103,18 @@ function isInsideIframe(): boolean {
   }
 }
 
+function getAuthBaseOrigin(): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    // Always use the canonical production domain on Vercel
+    if (host.includes('vercel.app')) {
+      return 'https://veyra-global.vercel.app';
+    }
+    return window.location.origin;
+  }
+  return 'https://veyra-global.vercel.app';
+}
+
 async function runGoogleOAuthFlow(params: {
   consented: boolean;
   onSuccess: () => Promise<void>;
@@ -116,7 +128,7 @@ async function runGoogleOAuthFlow(params: {
   }
   const sb = supabase;
 
-  const redirectTo = `${window.location.origin}/api/auth/callback${params.consented ? '?consented=1' : ''}`;
+  const redirectTo = `${getAuthBaseOrigin()}/api/auth/callback${params.consented ? '?consented=1' : ''}`;
 
   if (!isInsideIframe()) {
     const { error: oauthErr } = await sb.auth.signInWithOAuth({
@@ -294,7 +306,7 @@ export function LoginPage() {
         email: email.trim().toLowerCase(),
         options: {
           shouldCreateUser: false,
-          emailRedirectTo: `${window.location.origin}/api/auth/callback`,
+          emailRedirectTo: `${getAuthBaseOrigin()}/api/auth/callback`,
         },
       });
       if (otpErr) {
@@ -539,7 +551,7 @@ export function RegisterPage() {
             full_name: fullName.trim(),
             terms_accepted_version: CURRENT_TERMS_VERSION,
           },
-          emailRedirectTo: `${window.location.origin}/api/auth/callback?consented=1`,
+          emailRedirectTo: `${getAuthBaseOrigin()}/api/auth/callback?consented=1`,
         },
       });
       if (signUpErr) {
@@ -958,7 +970,7 @@ export function ForgotPasswordPage() {
     try {
       if (supabase) {
         await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
-          redirectTo: `${window.location.origin}/reset-password`,
+          redirectTo: `${getAuthBaseOrigin()}/reset-password`,
         });
       }
     } catch {

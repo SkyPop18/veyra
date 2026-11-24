@@ -210,6 +210,15 @@ export function createApiApp() {
   app.use(express.json({ limit: '512kb' }));
   app.use(cookieParser());
 
+  // Redirect requests from preview/team domain to canonical domain
+  app.use((req, res, next) => {
+    const host = (req.headers['x-forwarded-host'] || req.headers.host || '') as string;
+    if (host.includes('akshatkhushi2020-gmailcoms-projects.vercel.app')) {
+      return res.redirect(301, `https://veyra-global.vercel.app${req.originalUrl}`);
+    }
+    next();
+  });
+
   // Normalize incoming URLs so API routes match even if an edge rewrite stripped the /api prefix
   app.use((req, _res, next) => {
     if (!req.url.startsWith('/api') && !req.url.startsWith('/.well-known')) {
