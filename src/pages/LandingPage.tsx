@@ -87,8 +87,8 @@ export function LandingPage() {
         {/* Hero Section matching mockup */}
         <section className="relative overflow-hidden pt-10 pb-12 lg:pt-16 lg:pb-20">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 relative grid lg:grid-cols-12 gap-8 items-center">
-            {/* Left Copy (over translucent dashboard preview on mobile) */}
-            <div className="lg:col-span-5 space-y-5 sm:space-y-6 relative z-10">
+            {/* Left Copy */}
+            <div className="lg:col-span-5 space-y-5 sm:space-y-6">
               <h1 className="font-display text-[2.05rem] sm:text-5xl lg:text-[3.4rem] font-semibold tracking-tight leading-[1.08] text-[#09090b] dark:text-white">
                 Track every currency, compare every move
               </h1>
@@ -112,8 +112,8 @@ export function LandingPage() {
               </div>
             </div>
 
-            {/* Dashboard Preview: translucent background layer on mobile, tilted 3D showcase on desktop */}
-            <div className="pointer-events-none lg:pointer-events-auto absolute inset-x-3 top-0 bottom-0 opacity-25 lg:opacity-100 lg:static lg:inset-auto lg:col-span-7 overflow-hidden lg:overflow-visible hero-tablet-stage">
+            {/* Right Tilted 3D Dashboard Tablet Showcase (desktop only) */}
+            <div className="hidden lg:block lg:col-span-7 relative hero-tablet-stage">
               <div className="relative hero-tablet-3d rounded-2xl border border-[#d4d4d8] dark:border-white/10 bg-white dark:bg-[#11141c] shadow-[0_18px_48px_-16px_rgba(0,0,0,0.45)] overflow-hidden p-3.5 sm:p-4">
                 <div className="grid grid-cols-12 gap-3">
                   {/* Mini Tablet Sidebar */}
