@@ -7,10 +7,10 @@ import {
   ExternalLink,
   Mail,
   MessageSquare,
-  TrendingUp,
 } from 'lucide-react';
 import { useVeyra } from '../context/VeyraContext';
 import { DeltaText, PriceTicker, Sparkline, StrengthBar, ThemeToggle } from '../components/ui/Primitives';
+import { VeyraLogo } from '../components/ui/VeyraLogo';
 import { formatPrice } from '../lib/core';
 
 export function LandingPage() {
@@ -28,12 +28,8 @@ export function LandingPage() {
       {/* Top Navbar */}
       <header className="sticky top-0 z-40 border-b border-[#e4e4e7] dark:border-white/8 bg-white dark:bg-[#0b0d14]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-          <Link
-            to="/"
-            className="font-display text-lg font-semibold tracking-tight text-[#09090b] dark:text-white inline-flex items-center gap-1.5 shrink-0"
-          >
-            <span>VEYRA</span>
-            <span className="h-1.5 w-1.5 rounded-full bg-[#3b82f6]" aria-hidden="true" />
+          <Link to="/" className="shrink-0">
+            <VeyraLogo size="md" />
           </Link>
 
           <nav aria-label="Primary" className="hidden md:flex items-center gap-7 text-sm font-medium text-[#52525b] dark:text-[#a1a1aa]">
@@ -123,10 +119,7 @@ export function LandingPage() {
                   {/* Mini Tablet Sidebar */}
                   <div className="hidden sm:flex sm:col-span-3 flex-col justify-between rounded-xl bg-[#f4f4f5]/90 dark:bg-white/[0.04] border border-[#e4e4e7]/80 dark:border-white/8 p-3">
                     <div className="space-y-3">
-                      <div className="flex items-center gap-1.5 font-display text-xs font-semibold tracking-tight">
-                        <span>VEYRA</span>
-                        <span className="h-1.5 w-1.5 rounded-full bg-[#3b82f6]" />
-                      </div>
+                      <VeyraLogo size="xs" />
                       <div className="space-y-1 text-[11px] font-medium">
                         {['Dashboard', 'Currencies', 'Crypto', 'Leaderboard', 'Watchlist', 'News', 'AI Insights'].map((item, idx) => (
                           <div
@@ -613,10 +606,7 @@ export function LandingPage() {
       <footer className="border-t border-[#e4e4e7] dark:border-white/10 py-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 text-xs text-[#71717a] dark:text-[#a1a1aa]">
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2 font-display text-sm font-bold text-[#09090b] dark:text-white">
-              <TrendingUp className="h-4 w-4 text-[#3b82f6]" />
-              <span>VEYRA</span>
-            </div>
+            <VeyraLogo size="sm" />
             <p className="max-w-md">
               Veyra is a strictly view-only market intelligence platform. It does not facilitate trading, swaps, custody, or financial advice.
             </p>

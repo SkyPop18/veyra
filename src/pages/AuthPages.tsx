@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useVeyra } from '../context/VeyraContext';
 import { ThemeToggle } from '../components/ui/Primitives';
+import { VeyraLogo } from '../components/ui/VeyraLogo';
 import { getAuthBaseOrigin, isSupabaseClientReady, supabase } from '../lib/supabase';
 import { apiRequest } from '../lib/api';
 import { CURRENT_TERMS_VERSION, MIN_PASSWORD_LENGTH, isValidPassword } from '../lib/core';
@@ -42,9 +43,8 @@ function AuthLayout({
       <main className="flex-1 flex items-center justify-center px-4 py-10">
         <div className="w-full max-w-md glass-surface p-7 sm:p-8 space-y-6">
           <div className="space-y-1.5">
-            <Link to="/" className="font-display text-lg font-bold tracking-tight inline-flex items-center gap-1.5">
-              <span>VEYRA</span>
-              <span className="h-1.5 w-1.5 rounded-full bg-[#3b82f6]" aria-hidden="true" />
+            <Link to="/">
+              <VeyraLogo size="md" />
             </Link>
             <h1 className="font-display text-2xl font-bold tracking-tight text-[#09090b] dark:text-white">
               {title}

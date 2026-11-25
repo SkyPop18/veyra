@@ -130,15 +130,17 @@ function InteractiveChart({ spec }: { spec: ChartSpec }) {
   });
 
   const tooltipStyle = {
-    backgroundColor: '#09090b',
+    backgroundColor: '#11141c',
     borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 8,
+    borderRadius: 10,
     fontSize: 12,
-    color: '#ffffff',
+    color: '#fafafa',
   };
+  const tooltipLabelStyle = { color: '#fafafa', fontWeight: 600 };
+  const tooltipItemStyle = { color: '#d4d4d8' };
 
   return (
-    <div className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white/75 dark:bg-white/[0.04] p-4 shadow-xs">
+    <div className="my-3 rounded-xl border border-[#e4e4e7] dark:border-white/10 bg-white dark:bg-[#11141c] p-4">
       {spec.title && (
         <div className="flex items-center gap-2 mb-3 text-xs font-semibold text-[#09090b] dark:text-white">
           <BarChart3 className="h-4 w-4 text-[#3b82f6]" />
@@ -163,7 +165,7 @@ function InteractiveChart({ spec }: { spec: ChartSpec }) {
                   <Cell key={`cell-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={tooltipStyle} />
+              <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
             </PieChart>
           ) : chartType === 'line' ? (
@@ -171,7 +173,7 @@ function InteractiveChart({ spec }: { spec: ChartSpec }) {
               <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
               <XAxis dataKey={labelKey} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={tooltipStyle} />
+              <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
               {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
               {seriesKeys.map((key, idx) => (
                 <Line
@@ -189,14 +191,14 @@ function InteractiveChart({ spec }: { spec: ChartSpec }) {
             <AreaChart data={data} margin={{ top: 10, right: 12, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
                   <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
               <XAxis dataKey={labelKey} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={tooltipStyle} />
+              <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
               {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
               {seriesKeys.map((key, idx) => (
                 <Area
@@ -215,7 +217,7 @@ function InteractiveChart({ spec }: { spec: ChartSpec }) {
               <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
               <XAxis dataKey={labelKey} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={tooltipStyle} />
+              <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
               {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
               {seriesKeys.map((key, idx) => (
                 <Bar

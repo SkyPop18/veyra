@@ -15,37 +15,63 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
+export interface AiConversationTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export async function streamMarketAnalysis(params: {
   query: string;
+  history?: AiConversationTurn[];
   marketSnapshot: string;
   onChunk: (text: string) => void;
 }): Promise<{ fullText: string; tokensUsed: number }> {
   const ai = getGeminiClient();
   if (!ai) {
     throw new Error(
-      'GEMINI_API_KEY is not configured in server environment secrets. Add GEMINI_API_KEY in Settings > Secrets to enable live Pro AI analysis.'
+      'GEMINI_API_KEY is not configured in server environment secrets. Add GEMINI_API_KEY in Settings > Secrets to enable live AI analysis.'
     );
   }
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const currentYear = todayIso.slice(0, 4);
+
   const systemInstruction = [
     'You are Veyra Market Intelligence, a professional institutional FX and cryptocurrency research analyst.',
-    'You have direct live access to Veyra real-time rates for all 160+ world fiat currencies and top cryptocurrencies.',
-    'When asked about Indian currency (INR / Indian Rupee) or any world currency or cryptocurrency, ALWAYS state its exact current live rate vs USD (e.g. "1 USD = ₹86.85 INR" or "1 INR = $0.0115 USD"), 24h change, and its relative market strength.',
-    'If the user asks to compare or convert between two currencies (e.g. EUR to INR, GBP to INR, AED to INR, etc.), calculate the exact cross-rate from the live USD rates: Rate(A to B) = Rate(USD to B) / Rate(USD to A).',
-    'Whenever comparing multiple currencies, showing momentum rankings, or when a visual chart or graph helps illustrate the answer, emit an interactive website-rendered chart using this exact markdown code block format:',
+    `CURRENT SERVER DATE: ${todayIso} (Year: ${currentYear}). Dates up to and including ${todayIso} are historical or current — NEVER claim ${currentYear} is in the future.`,
+    'RESPONSE RULES:',
+    '- Respond directly to the user with clean data and analysis. NEVER output internal reasoning or meta sentences like "The user is asking...".',
+    '- Maintain conversation continuity: if the user asks a short follow-up (such as "29 oct, 5 nov, 20 nov, today", "no like oct 2026, nov 2026", or "what about in EUR?"), apply it to the currencies or crypto discussed in previous messages.',
+    '- When asked about any currency (e.g. INR / Indian Rupee, EUR, GBP, JPY, AED) or cryptocurrency, state its exact current live rate vs USD (and the exact requested pair rate such as EUR/INR if asked), 24h change, and relative strength score from the LIVE VEYRA MARKET SNAPSHOT.',
+    '- For historical trend queries ("1m", "3m", "oct 2026", specific dates like "29 oct", "5 nov", "20 nov", "today"): USE the exact HISTORICAL TREND SERIES provided in the market snapshot! Select/include the exact dates from that series. If an exact requested calendar date fell on a weekend or market holiday, use the nearest prior available business-day rate from the series and label it concisely (e.g., "Nov 20" or "Oct 29 (closest market print)"). NEVER invent or guess 2023/stale numbers, and NEVER falsely say you lack historical trend data when the historical series is in the snapshot.',
+    '- If the user asks to convert or chart any pair A/B (e.g. EUR/INR or GBP/INR), compute cross-rates directly using live or dated USD rates: Rate(A to B) = Rate(USD to B) / Rate(USD to A).',
+    '- CHART FORMAT: Whenever showing a time trend over dates/months (e.g. 1M, Oct–Nov, specific dates), ALWAYS emit a `"type": "line"` or `"type": "area"` chart (NOT a `"bar"` chart of other currencies unless the user asked to compare currencies):',
     '```chart',
-    '{"type": "bar", "title": "Chart Title", "data": [{"name": "USD", "value": 1.0}, {"name": "EUR", "value": 0.95}, {"name": "GBP", "value": 0.79}, {"name": "INR", "value": 86.85}]}',
+    '{"type": "line", "title": "USD to INR Trend (Oct - Nov)", "data": [{"date": "2026-10-29", "USD_INR": 94.68}, {"date": "2026-11-05", "USD_INR": 94.12}, {"date": "2026-11-20", "USD_INR": 93.15}, {"date": "2026-11-25", "USD_INR": 92.93}]}',
     '```',
-    'Supported chart types are "bar", "line", "area", and "pie". For multi-series comparisons you may include multiple numeric keys per item. Ensure the JSON inside ```chart is valid double-quoted JSON with no trailing commas or comments.',
-    'STRICT RULE: NEVER generate image files, markdown image links (![]()), SVG code, base64 images, or ASCII-art charts. Always provide real interactive ```chart JSON blocks so the Veyra web interface renders interactive graphs directly.',
-    'Never recommend executing trades, swaps, or financial transactions, and always include a concise one-line informational-only disclaimer at the end.',
-    'Use clean bullet points, exact figures from the snapshot, and balanced risk factors.',
+    '- Supported chart types: "line", "area", "bar", "pie". Always output valid double-quoted JSON inside ```chart blocks with zero comments or trailing commas.',
+    '- STRICT RULE: NEVER generate image files, markdown image links (![]()), SVG code, base64 images, or ASCII-art charts.',
+    '- Never recommend executing trades, swaps, or financial transactions, and end with a concise one-line informational-only disclaimer.',
+    '',
+    'LIVE VEYRA MARKET SNAPSHOT:',
+    params.marketSnapshot,
   ].join('\n');
 
-  const contents = `[SYSTEM INSTRUCTION: ${systemInstruction}]\n\nLIVE VEYRA MARKET SNAPSHOT:\n${params.marketSnapshot}\n\nUSER QUESTION:\n${params.query}`;
+  const priorTurns = (params.history || [])
+    .filter((t) => t && t.text && t.text.trim().length > 0)
+    .slice(-8)
+    .map((t) => ({
+      role: t.role === 'assistant' ? ('model' as const) : ('user' as const),
+      parts: [{ text: t.text.trim().slice(0, 2500) }],
+    }));
 
-  // Prioritize lower-usage, high-speed flash-lite models to preserve quota
-  const CANDIDATE_MODELS = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+  const contents = [
+    ...priorTurns,
+    { role: 'user' as const, parts: [{ text: params.query }] },
+  ];
+
+  // Prioritize high-quality, fast flash models with graceful fallback
+  const CANDIDATE_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'];
   let lastError: Error | null = null;
 
   for (const modelName of CANDIDATE_MODELS) {
@@ -53,6 +79,9 @@ export async function streamMarketAnalysis(params: {
       const stream = await ai.models.generateContentStream({
         model: modelName,
         contents,
+        config: {
+          systemInstruction,
+        },
       });
 
       let fullText = '';
@@ -65,9 +94,10 @@ export async function streamMarketAnalysis(params: {
       }
 
       if (fullText.trim()) {
+        const promptLen = systemInstruction.length + params.query.length;
         return {
           fullText,
-          tokensUsed: Math.max(1, Math.ceil((contents.length + fullText.length) / 4)),
+          tokensUsed: Math.max(1, Math.ceil((promptLen + fullText.length) / 4)),
         };
       }
     } catch (err) {
@@ -81,11 +111,13 @@ export async function streamMarketAnalysis(params: {
 
 export async function generateMarketAnalysis(params: {
   query: string;
+  history?: AiConversationTurn[];
   marketSnapshot: string;
 }): Promise<string> {
   let result = '';
   await streamMarketAnalysis({
     query: params.query,
+    history: params.history,
     marketSnapshot: params.marketSnapshot,
     onChunk: (chunk) => {
       result += chunk;

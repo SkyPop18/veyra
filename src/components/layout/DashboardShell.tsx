@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useVeyra } from '../../context/VeyraContext';
 import { PriceTicker, ThemeToggle } from '../ui/Primitives';
+import { VeyraLogo } from '../ui/VeyraLogo';
 import { OnboardingModal } from '../OnboardingModal';
 import { cn } from '../../lib/cn';
 import { isProSubscriptionActive } from '../../lib/core';
@@ -100,12 +101,8 @@ export function DashboardShell() {
     <div className="flex h-full flex-col justify-between p-4">
       <div className="space-y-6 overflow-y-auto pr-1">
         <div className="flex items-center justify-between px-2 pt-1">
-          <Link
-            to="/"
-            className="font-display text-xl font-bold tracking-tight text-[#09090b] dark:text-white whitespace-nowrap inline-flex items-center gap-1.5"
-          >
-            <span>VEYRA</span>
-            <span className="h-1.5 w-1.5 rounded-full bg-[#3b82f6]" aria-hidden="true" />
+          <Link to="/" className="whitespace-nowrap">
+            <VeyraLogo size="md" />
           </Link>
           <button
             type="button"

@@ -12,6 +12,7 @@ import {
   fetchHistoricalSeries,
   fetchLiveCryptoAssets,
   fetchLiveFiatCurrencies,
+  fetchPairHistoricalSeries,
   forceRefreshMarkets,
   getCryptoAssetByIdOrSymbol,
   searchCryptoCatalog,
@@ -783,9 +784,127 @@ export function createApiApp() {
     res.json({ items });
   });
 
+  const CURRENCY_TEXT_ALIASES: Array<[RegExp, string]> = [
+    [/\b(indian|india|rupee|rupees|inr)\b/i, 'INR'],
+    [/\b(us\s*dollar|usd|dollar|dollars|greenback)\b/i, 'USD'],
+    [/\b(euro|euros|eurozone|eur)\b/i, 'EUR'],
+    [/\b(pound|pounds|sterling|british|gbp)\b/i, 'GBP'],
+    [/\b(yen|japan|japanese|jpy)\b/i, 'JPY'],
+    [/\b(dirham|uae|dubai|emirates|aed)\b/i, 'AED'],
+    [/\b(australian|australia|aussie|aud)\b/i, 'AUD'],
+    [/\b(canadian|canada|cad)\b/i, 'CAD'],
+    [/\b(swiss|franc|switzerland|chf)\b/i, 'CHF'],
+    [/\b(yuan|renminbi|rmb|china|chinese|cny)\b/i, 'CNY'],
+    [/\b(singapore|sgd)\b/i, 'SGD'],
+    [/\b(riyal|saudi|sar)\b/i, 'SAR'],
+    [/\b(dinar|kuwait|kuwaiti|kwd)\b/i, 'KWD'],
+    [/\b(won|korea|korean|krw)\b/i, 'KRW'],
+    [/\b(brazil|brazilian|brl)\b/i, 'BRL'],
+    [/\b(mexico|mexican|mxn)\b/i, 'MXN'],
+    [/\b(rand|south\s*africa|zar)\b/i, 'ZAR'],
+    [/\b(hong\s*kong|hkd)\b/i, 'HKD'],
+    [/\b(new\s*zealand|nzd)\b/i, 'NZD'],
+    [/\b(lira|turkey|turkish|try)\b/i, 'TRY'],
+  ];
+
+  const CRYPTO_TEXT_ALIASES: Array<[RegExp, string]> = [
+    [/\b(btc|bitcoin)\b/i, 'BTC'],
+    [/\b(eth|ethereum|ether)\b/i, 'ETH'],
+    [/\b(sol|solana)\b/i, 'SOL'],
+    [/\b(xrp|ripple)\b/i, 'XRP'],
+    [/\b(bnb|binance)\b/i, 'BNB'],
+    [/\b(doge|dogecoin)\b/i, 'DOGE'],
+    [/\b(ada|cardano)\b/i, 'ADA'],
+    [/\b(avax|avalanche)\b/i, 'AVAX'],
+  ];
+
+  function extractAssetsFromText(
+    text: string,
+    ratesMap: Record<string, number>,
+    cryptoList: Array<{ symbol: string }>
+  ): { fiat: string[]; crypto: string[] } {
+    const fiatSet = new Set<string>();
+    const cryptoSet = new Set<string>();
+
+    for (const [rx, code] of CURRENCY_TEXT_ALIASES) {
+      if (rx.test(text)) fiatSet.add(code);
+    }
+    for (const [rx, sym] of CRYPTO_TEXT_ALIASES) {
+      if (rx.test(text)) cryptoSet.add(sym);
+    }
+
+    const cryptoSyms = new Set(cryptoList.map((c) => c.symbol.toUpperCase()));
+    const rawTokens = text.match(/\b[A-Za-z]{2,5}\b/g) || [];
+    for (const tok of rawTokens) {
+      const upper = tok.toUpperCase();
+      if (ratesMap[upper] && upper !== 'THE' && upper !== 'AND' && upper !== 'FOR' && upper !== 'ALL' && upper !== 'TOP' && upper !== 'NOW' && upper !== 'DAY' && upper !== 'OCT' && upper !== 'NOV' && upper !== 'DEC' && upper !== 'JAN' && upper !== 'FEB' && upper !== 'MAR' && upper !== 'APR' && upper !== 'MAY' && upper !== 'JUN' && upper !== 'JUL' && upper !== 'AUG' && upper !== 'SEP') {
+        fiatSet.add(upper);
+      }
+      if (cryptoSyms.has(upper) && upper !== 'THE' && upper !== 'AND') {
+        cryptoSet.add(upper);
+      }
+    }
+    return { fiat: Array.from(fiatSet), crypto: Array.from(cryptoSet) };
+  }
+
+  function resolveDateRange(combinedText: string): { startDate: string; endDate: string; spanDays: number } {
+    const now = new Date();
+    const endDate = now.toISOString().slice(0, 10);
+    let spanDays = 45;
+
+    const relMatch = combinedText.match(/\b(\d+)\s*(w|wk|week|weeks|m|mo|month|months|d|day|days|y|yr|year|years)\b/i);
+    if (relMatch) {
+      const num = Math.max(1, parseInt(relMatch[1], 10));
+      const unit = relMatch[2].toLowerCase();
+      if (unit.startsWith('d')) spanDays = Math.min(365, Math.max(7, num));
+      else if (unit.startsWith('w')) spanDays = Math.min(365, num * 7 + 3);
+      else if (unit.startsWith('m')) spanDays = Math.min(365, num * 31 + 5);
+      else if (unit.startsWith('y')) spanDays = Math.min(365, num * 365);
+    }
+
+    const MONTHS: Record<string, number> = {
+      jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+      may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7,
+      sep: 8, sept: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+    };
+
+    const monthRegex = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b(?:\s*(?:20\d{2}))?/gi;
+    let earliestMonthStart: number | null = null;
+    for (const m of combinedText.matchAll(monthRegex)) {
+      const monthIdx = MONTHS[m[1].toLowerCase()];
+      if (monthIdx === undefined) continue;
+      const yearMatch = m[0].match(/20\d{2}/);
+      let year = yearMatch ? parseInt(yearMatch[0], 10) : now.getUTCFullYear();
+      if (!yearMatch && monthIdx > now.getUTCMonth()) {
+        year -= 1;
+      }
+      const candidateMs = Date.UTC(year, monthIdx, 1) - 4 * 86400 * 1000;
+      if (candidateMs <= now.getTime() && (earliestMonthStart === null || candidateMs < earliestMonthStart)) {
+        earliestMonthStart = candidateMs;
+      }
+    }
+
+    if (earliestMonthStart !== null) {
+      const diffDays = Math.ceil((now.getTime() - earliestMonthStart) / 86400000);
+      spanDays = Math.min(365, Math.max(spanDays, diffDays));
+    }
+
+    const startDate = new Date(now.getTime() - spanDays * 86400 * 1000).toISOString().slice(0, 10);
+    return { startDate, endDate, spanDays };
+  }
+
   const aiPromptSchema = z
     .object({
       query: z.string().trim().min(2).max(1200),
+      history: z
+        .array(
+          z.object({
+            role: z.enum(['user', 'assistant']),
+            text: z.string().max(4000),
+          })
+        )
+        .max(12)
+        .optional(),
       stream: z.boolean().optional(),
     })
     .strict();
@@ -830,8 +949,98 @@ export function createApiApp() {
       const cryptoCoins = Array.isArray(liveCrypto?.coins) ? liveCrypto.coins : [];
       const strength = buildUnifiedStrengthList(liveFiat.currencies || [], cryptoCoins);
 
+      // Extract target currencies/crypto & date window from current query + recent history
+      const historyTurns = parsed.data.history || [];
+      let detected = extractAssetsFromText(parsed.data.query, liveFiat.rates || {}, cryptoCoins);
+      if (detected.fiat.filter((c) => c !== 'USD').length === 0 && detected.crypto.length === 0) {
+        for (let i = historyTurns.length - 1; i >= 0; i--) {
+          const fallback = extractAssetsFromText(historyTurns[i].text, liveFiat.rates || {}, cryptoCoins);
+          if (fallback.fiat.filter((c) => c !== 'USD').length > 0 || fallback.crypto.length > 0) {
+            detected = {
+              fiat: Array.from(new Set([...detected.fiat, ...fallback.fiat])),
+              crypto: Array.from(new Set([...detected.crypto, ...fallback.crypto])),
+            };
+            break;
+          }
+        }
+      }
+
+      const combinedForDates = `${parsed.data.query} ${historyTurns.slice(-4).map((t) => t.text).join(' ')}`;
+      const { startDate, endDate, spanDays } = resolveDateRange(combinedForDates);
+
+      const nonUsdFiat = detected.fiat.filter((c) => c !== 'USD');
+      const pairSpecs: Array<{ base: string; quote: string }> = [];
+      if (nonUsdFiat.length === 1) {
+        pairSpecs.push({ base: 'USD', quote: nonUsdFiat[0] });
+      } else if (nonUsdFiat.length >= 2) {
+        if (detected.fiat.includes('USD')) {
+          for (const c of nonUsdFiat.slice(0, 3)) {
+            pairSpecs.push({ base: 'USD', quote: c });
+          }
+        } else {
+          pairSpecs.push({ base: nonUsdFiat[0], quote: nonUsdFiat[1] });
+          pairSpecs.push({ base: 'USD', quote: nonUsdFiat[0] });
+          pairSpecs.push({ base: 'USD', quote: nonUsdFiat[1] });
+        }
+      } else if (detected.crypto.length === 0) {
+        // Default trend context if general overview requested
+        pairSpecs.push({ base: 'USD', quote: 'INR' }, { base: 'USD', quote: 'EUR' });
+      }
+
+      const [pairHistories, cryptoHistories] = await Promise.all([
+        Promise.all(
+          pairSpecs.slice(0, 3).map((spec) =>
+            fetchPairHistoricalSeries({
+              baseCode: spec.base,
+              quoteCode: spec.quote,
+              startDate,
+              endDate,
+            })
+          )
+        ),
+        Promise.all(
+          detected.crypto.slice(0, 2).map(async (sym) => {
+            const pts = await fetchHistoricalSeries('crypto', sym, spanDays);
+            return { symbol: sym, points: pts };
+          })
+        ),
+      ]);
+
+      const formatSeriesSample = <T extends { date?: string; time?: string; rate?: number; close?: number }>(
+        pts: T[]
+      ) => {
+        if (pts.length <= 40) return pts;
+        const step = Math.ceil(pts.length / 36);
+        const sampled = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+        return sampled;
+      };
+
+      const historicalBlocks: string[] = [];
+      for (const h of pairHistories) {
+        if (h.points.length === 0) continue;
+        const pts = formatSeriesSample(h.points);
+        const rows = pts.map((p) => `${p.date}: ${p.rate}`).join(', ');
+        const first = h.points[0];
+        const last = h.points[h.points.length - 1];
+        const pct = first.rate > 0 ? (((last.rate - first.rate) / first.rate) * 100).toFixed(2) : '0.00';
+        historicalBlocks.push(
+          `${h.pair} (${h.source}, ${startDate}..${endDate}, period change ${Number(pct) >= 0 ? '+' : ''}${pct}%):\n  ${rows}`
+        );
+      }
+      for (const ch of cryptoHistories) {
+        if (ch.points.length === 0) continue;
+        const pts = formatSeriesSample(ch.points);
+        const rows = pts.map((p) => `${p.time}: $${p.close}`).join(', ');
+        historicalBlocks.push(`${ch.symbol}/USD (last ${spanDays}d):\n  ${rows}`);
+      }
+
       // Key currency rates vs USD
-      const keyCodes = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AED', 'CAD', 'AUD', 'CHF', 'CNY', 'SGD', 'BRL', 'MXN', 'ZAR', 'SAR', 'KRW'];
+      const keyCodes = Array.from(
+        new Set([
+          ...detected.fiat,
+          'INR', 'USD', 'EUR', 'GBP', 'JPY', 'AED', 'CAD', 'AUD', 'CHF', 'CNY', 'SGD', 'BRL', 'MXN', 'ZAR', 'SAR', 'KRW',
+        ])
+      );
       const keyCurrencies = keyCodes
         .map((code) => {
           const found = liveFiat.currencies.find((c) => c.code === code);
@@ -858,16 +1067,26 @@ export function createApiApp() {
         .join('; ');
 
       const snapshot = [
+        `CURRENT SERVER DATE: ${endDate}`,
+        historicalBlocks.length > 0
+          ? `HISTORICAL TREND SERIES (REAL DATED RATES FOR CHARTS):\n${historicalBlocks.join('\n\n')}`
+          : '',
         `Key Tracked Currencies (vs 1 USD):\n${keyCurrencies}`,
         `Top Strength Index Currencies:\n${topStrengthFiat}`,
         `Complete 160+ World Fiat Exchange Rates (1 USD = [Code: Rate]):\n${allFiatRates}`,
         `Top Cryptocurrency Spot Prices:\n${topCrypto}`,
-        `Fear & Greed Index:\n${fg.current.value} (${fg.current.classification})`,
-      ].join('\n\n');
+        `Market Sentiment Index:\n${fg.current.value} (${fg.current.classification})`,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
 
       // JSON non-streaming mode if requested explicitly
       if (parsed.data.stream === false || req.query.stream === '0') {
-        const fullText = await generateMarketAnalysis({ query: parsed.data.query, marketSnapshot: snapshot });
+        const fullText = await generateMarketAnalysis({
+          query: parsed.data.query,
+          history: historyTurns,
+          marketSnapshot: snapshot,
+        });
         const entry = await saveAiAnalysis(uid, parsed.data.query, fullText, Math.ceil(fullText.length / 4), req.sbSession?.token);
         return res.json({ ok: true, text: fullText, entry });
       }
@@ -883,6 +1102,7 @@ export function createApiApp() {
       try {
         const { fullText, tokensUsed } = await streamMarketAnalysis({
           query: parsed.data.query,
+          history: historyTurns,
           marketSnapshot: snapshot,
           onChunk: (chunk) => {
             res.write(`data: ${JSON.stringify({ chunk })}\n\n`);

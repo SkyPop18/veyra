@@ -617,6 +617,102 @@ export async function buildStrengthLeaderboard(): Promise<{
   };
 }
 
+export async function fetchPairHistoricalSeries(params: {
+  baseCode: string;
+  quoteCode: string;
+  startDate: string;
+  endDate: string;
+}): Promise<{
+  pair: string;
+  source: 'historical-fx' | 'estimated';
+  points: Array<{ date: string; rate: number }>;
+}> {
+  const base = params.baseCode.trim().toUpperCase();
+  const quote = params.quoteCode.trim().toUpperCase();
+  const startIso = params.startDate.slice(0, 10);
+  const endIso = params.endDate.slice(0, 10);
+  const pair = `${base}/${quote}`;
+
+  if (base === quote) {
+    return { pair, source: 'historical-fx', points: [{ date: endIso, rate: 1 }] };
+  }
+
+  const cacheKey = `pair_hist_${base}_${quote}_${startIso}_${endIso}`;
+  const cached = getCached<{
+    pair: string;
+    source: 'historical-fx' | 'estimated';
+    points: Array<{ date: string; rate: number }>;
+  }>(cacheKey);
+  if (cached) return cached;
+
+  const fiatData = await fetchLiveFiatCurrencies();
+  const baseLive = base === 'USD' ? 1 : fiatData.rates[base];
+  const quoteLive = quote === 'USD' ? 1 : fiatData.rates[quote];
+  const liveCross =
+    typeof baseLive === 'number' && baseLive > 0 && typeof quoteLive === 'number' && quoteLive > 0
+      ? Number((quoteLive / baseLive).toFixed(quoteLive / baseLive >= 100 ? 3 : 4))
+      : null;
+
+  try {
+    const url = `https://api.frankfurter.app/${encodeURIComponent(startIso)}..${encodeURIComponent(endIso)}?from=${encodeURIComponent(base)}&to=${encodeURIComponent(quote)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
+    if (res.ok) {
+      const json = (await res.json()) as {
+        rates?: Record<string, Record<string, number>>;
+      };
+      const entries = Object.entries(json.rates || {})
+        .filter(([, map]) => typeof map?.[quote] === 'number' && map[quote] > 0)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, map]) => ({
+          date,
+          rate: Number(map[quote].toFixed(map[quote] >= 100 ? 3 : 4)),
+        }));
+
+      if (entries.length >= 2) {
+        const todayIso = new Date().toISOString().slice(0, 10);
+        if (liveCross && entries[entries.length - 1]?.date < todayIso && endIso >= todayIso) {
+          entries.push({ date: todayIso, rate: liveCross });
+        }
+        return setCached(cacheKey, { pair, source: 'historical-fx', points: entries }, 30 * 60 * 1000);
+      }
+    }
+  } catch {
+    // Fall back to anchored curve below for non-ECB/pegged currencies
+  }
+
+  const spanDays = Math.max(
+    7,
+    Math.min(
+      365,
+      Math.ceil((Date.parse(endIso) - Date.parse(startIso)) / (86400 * 1000)) || 30
+    )
+  );
+  const [baseSeries, quoteSeries] = await Promise.all([
+    base === 'USD' ? Promise.resolve(null) : fetchHistoricalSeries('fiat', base, spanDays),
+    quote === 'USD' ? Promise.resolve(null) : fetchHistoricalSeries('fiat', quote, spanDays),
+  ]);
+
+  const refSeries = quoteSeries || baseSeries || [];
+  const points = refSeries.map((pt, idx) => {
+    const bVal = baseSeries ? baseSeries[idx]?.value || baseLive || 1 : 1;
+    const qVal = quoteSeries ? quoteSeries[idx]?.value || quoteLive || 1 : 1;
+    const ratio = qVal / (bVal || 1);
+    return {
+      date: pt.time,
+      rate: Number(ratio.toFixed(ratio >= 100 ? 3 : 4)),
+    };
+  });
+
+  if (liveCross && points.length > 0) {
+    points[points.length - 1] = {
+      date: new Date().toISOString().slice(0, 10),
+      rate: liveCross,
+    };
+  }
+
+  return setCached(cacheKey, { pair, source: 'estimated', points }, 15 * 60 * 1000);
+}
+
 export async function fetchHistoricalSeries(
   assetType: 'fiat' | 'crypto',
   symbolOrId: string,
@@ -627,6 +723,63 @@ export async function fetchHistoricalSeries(
   const cacheKey = `hist_${assetType}_${cleanId.toLowerCase()}_${safeDays}`;
   const cached = getCached<HistoricalPoint[]>(cacheKey);
   if (cached) return cached;
+
+  if (assetType === 'fiat') {
+    const upperCode = cleanId.toUpperCase();
+    if (upperCode !== 'USD' && /^[A-Z]{3}$/.test(upperCode)) {
+      try {
+        const endIso = new Date().toISOString().slice(0, 10);
+        const startIso = new Date(Date.now() - safeDays * 86400 * 1000).toISOString().slice(0, 10);
+        const url = `https://api.frankfurter.app/${startIso}..${endIso}?from=USD&to=${encodeURIComponent(upperCode)}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
+        if (res.ok) {
+          const json = (await res.json()) as {
+            rates?: Record<string, Record<string, number>>;
+          };
+          const sortedDates = Object.entries(json.rates || {})
+            .filter(([, map]) => typeof map?.[upperCode] === 'number' && map[upperCode] > 0)
+            .sort(([a], [b]) => a.localeCompare(b));
+
+          if (sortedDates.length >= 4) {
+            const series: HistoricalPoint[] = [];
+            let prev = sortedDates[0][1][upperCode];
+            for (const [date, map] of sortedDates) {
+              const close = map[upperCode];
+              const digits = close >= 100 ? 2 : 4;
+              const open = prev;
+              const high = Math.max(open, close);
+              const low = Math.min(open, close);
+              series.push({
+                time: date,
+                open: Number(open.toFixed(digits)),
+                high: Number(high.toFixed(digits)),
+                low: Number(low.toFixed(digits)),
+                close: Number(close.toFixed(digits)),
+                value: Number(close.toFixed(digits)),
+              });
+              prev = close;
+            }
+            const fiatData = await fetchLiveFiatCurrencies();
+            const liveRate = fiatData.rates[upperCode];
+            if (typeof liveRate === 'number' && liveRate > 0 && series[series.length - 1]?.time < endIso) {
+              const digits = liveRate >= 100 ? 2 : 4;
+              series.push({
+                time: endIso,
+                open: series[series.length - 1].close,
+                high: Number(Math.max(series[series.length - 1].close, liveRate).toFixed(digits)),
+                low: Number(Math.min(series[series.length - 1].close, liveRate).toFixed(digits)),
+                close: Number(liveRate.toFixed(digits)),
+                value: Number(liveRate.toFixed(digits)),
+              });
+            }
+            return setCached(cacheKey, series, 30 * 60 * 1000);
+          }
+        }
+      } catch {
+        // fallback below if Frankfurter doesn't support this currency
+      }
+    }
+  }
 
   if (assetType === 'crypto') {
     const coin = await getCryptoAssetByIdOrSymbol(cleanId);

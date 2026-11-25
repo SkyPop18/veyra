@@ -200,12 +200,23 @@ export function AiAnalysisPage() {
       const bearer = await getActiveAccessToken();
       if (bearer) headers.Authorization = `Bearer ${bearer}`;
 
+      const recentHistory = messages
+        .filter((m) => !m.error && m.text.trim().length > 0)
+        .slice(-8)
+        .map((m) => ({
+          role: m.role,
+          text: m.text.slice(0, 2000),
+        }));
+
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
         headers,
         credentials: 'include',
         signal: controller.signal,
-        body: JSON.stringify({ query: trimmed }),
+        body: JSON.stringify({
+          query: trimmed,
+          ...(recentHistory.length > 0 ? { history: recentHistory } : {}),
+        }),
       });
 
       if (!res.ok) {
