@@ -85,35 +85,35 @@ export function LandingPage() {
 
       <main className="flex-1">
         {/* Hero Section matching mockup */}
-        <section className="relative overflow-hidden pt-12 pb-14 lg:pt-16 lg:pb-20">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 grid lg:grid-cols-12 gap-10 lg:gap-8 items-center">
-            {/* Left Copy */}
-            <div className="lg:col-span-5 space-y-6">
-              <h1 className="font-display text-4xl sm:text-5xl lg:text-[3.4rem] font-semibold tracking-tight leading-[1.06] text-[#09090b] dark:text-white">
+        <section className="relative overflow-hidden pt-10 pb-12 lg:pt-16 lg:pb-20">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 relative grid lg:grid-cols-12 gap-8 items-center">
+            {/* Left Copy (over translucent dashboard preview on mobile) */}
+            <div className="lg:col-span-5 space-y-5 sm:space-y-6 relative z-10">
+              <h1 className="font-display text-[2.05rem] sm:text-5xl lg:text-[3.4rem] font-semibold tracking-tight leading-[1.08] text-[#09090b] dark:text-white">
                 Track every currency, compare every move
               </h1>
-              <p className="text-base text-[#52525b] dark:text-[#a1a1aa] leading-relaxed max-w-lg">
+              <p className="text-sm sm:text-base text-[#3f3f46] dark:text-[#d4d4d8] leading-relaxed max-w-lg">
                 Live exchange rates, normalized strength rankings, and macro news across {fiat.length || 160}+ fiat currencies and major digital assets—built strictly for market observation, not trading.
               </p>
 
-              <div className="flex flex-wrap items-center gap-3 pt-1">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5 sm:gap-3 pt-1">
                 <Link
                   to={user ? '/dashboard/home' : '/register'}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white px-5 py-3 text-sm font-semibold transition-colors whitespace-nowrap"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#3b82f6] hover:bg-[#2563eb] text-white px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
                 >
                   <span>Launch Dashboard</span>
                 </Link>
                 <a
                   href="#leaderboard-preview"
-                  className="inline-flex items-center gap-2 rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white/85 dark:bg-white/[0.06] hover:border-[#3b82f6]/50 px-5 py-3 text-sm font-semibold text-[#09090b] dark:text-[#fafafa] transition-colors whitespace-nowrap"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#e4e4e7] dark:border-white/15 bg-white/90 dark:bg-[#11141c]/90 hover:border-[#3b82f6]/50 px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-[#09090b] dark:text-[#fafafa] transition-colors whitespace-nowrap"
                 >
                   <span>Explore Leaderboard</span>
                 </a>
               </div>
             </div>
 
-            {/* Right Tilted 3D Dashboard Tablet Showcase */}
-            <div className="lg:col-span-7 relative hero-tablet-stage">
+            {/* Dashboard Preview: translucent background layer on mobile, tilted 3D showcase on desktop */}
+            <div className="pointer-events-none lg:pointer-events-auto absolute inset-x-3 top-0 bottom-0 opacity-25 lg:opacity-100 lg:static lg:inset-auto lg:col-span-7 overflow-hidden lg:overflow-visible hero-tablet-stage">
               <div className="relative hero-tablet-3d rounded-2xl border border-[#d4d4d8] dark:border-white/10 bg-white dark:bg-[#11141c] shadow-[0_18px_48px_-16px_rgba(0,0,0,0.45)] overflow-hidden p-3.5 sm:p-4">
                 <div className="grid grid-cols-12 gap-3">
                   {/* Mini Tablet Sidebar */}
@@ -625,7 +625,7 @@ export function LandingPage() {
               rel="noopener noreferrer"
               className="hover:text-[#09090b] dark:hover:text-white transition-colors"
             >
-              Support
+              Buy me a tea
             </a>
             <a
               href="mailto:akshatbhopali@gmail.com"
