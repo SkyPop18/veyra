@@ -134,8 +134,16 @@ export function DashboardHomePage() {
     <div className="space-y-6">
       {/* Row 1 — Quick Stats (4 glass cards) */}
       <section aria-label="Market overview stats" className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="glass-surface p-5 flex flex-col justify-between gap-3">
-          <p className="text-xs font-medium text-[#71717a] dark:text-[#a1a1aa]">Market Sentiment</p>
+        <Link
+          to="/dashboard/sentiment"
+          className="glass-surface-hover p-5 flex flex-col justify-between gap-3 group"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium text-[#71717a] dark:text-[#a1a1aa]">Market Sentiment</p>
+            <span className="text-[11px] font-medium text-[#3b82f6] group-hover:underline">
+              How it&apos;s calculated →
+            </span>
+          </div>
           {fearGreed ? (
             <FearGreedGauge
               value={fearGreed.current.value}
@@ -144,7 +152,7 @@ export function DashboardHomePage() {
           ) : (
             <div className="h-14 rounded-lg bg-[#f4f4f5] dark:bg-white/5" />
           )}
-        </div>
+        </Link>
 
         <div className="glass-surface p-5 flex flex-col justify-between gap-3">
           <div className="flex items-center justify-between">
@@ -276,6 +284,8 @@ export function DashboardHomePage() {
                     fontSize: '12px',
                     color: theme === 'dark' ? '#fafafa' : '#09090b',
                   }}
+                  labelStyle={{ color: theme === 'dark' ? '#fafafa' : '#09090b', fontWeight: 600 }}
+                  itemStyle={{ color: theme === 'dark' ? '#d4d4d8' : '#3f3f46' }}
                   formatter={(value: unknown) => [`${Number(value).toFixed(1)} / 100`, 'Strength Score']}
                 />
                 <Bar dataKey="score" radius={[8, 8, 0, 0]} maxBarSize={52}>

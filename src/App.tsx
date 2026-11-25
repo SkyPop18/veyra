@@ -14,6 +14,7 @@ import {
 import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
 import { DashboardShell } from './components/layout/DashboardShell';
 import { DashboardHomePage } from './pages/dashboard/DashboardHomePage';
+import { SentimentDetailPage } from './pages/dashboard/SentimentDetailPage';
 import { ComparePage, LeaderboardPage } from './pages/dashboard/LeaderboardAndComparePages';
 import {
   CryptoDetailPage,
@@ -190,6 +191,7 @@ export default function App() {
           >
             <Route index element={<Navigate to="/dashboard/home" replace />} />
             <Route path="home" element={<DashboardHomePage />} />
+            <Route path="sentiment" element={<SentimentDetailPage />} />
             <Route path="leaderboard" element={<LeaderboardPage />} />
             <Route path="compare" element={<ComparePage />} />
             <Route path="currencies" element={<CurrenciesListPage />} />

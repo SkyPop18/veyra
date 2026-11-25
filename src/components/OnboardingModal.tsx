@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Check, Shield, User, X } from 'lucide-react';
 import { useVeyra } from '../context/VeyraContext';
 import { apiRequest } from '../lib/api';
@@ -24,18 +24,40 @@ const STARTER_ASSETS: Array<{ symbol: string; name: string; type: 'fiat' | 'cryp
   { symbol: 'SOL', name: 'Solana', type: 'crypto' },
 ];
 
-export function OnboardingModal() {
-  const { user, refreshAuth, refreshUserData, notify } = useVeyra();
+function isAlreadyOnboarded(
+  user: { id: string; avatar_url: string | null; created_at: string } | null,
+  watchlistCount: number
+): boolean {
+  if (!user) return true;
+  if (watchlistCount > 0 || Boolean(user.avatar_url)) return true;
+  const createdMs = Date.parse(user.created_at);
+  if (Number.isFinite(createdMs) && Date.now() - createdMs > 5 * 60 * 1000) {
+    return true;
+  }
+  try {
+    return localStorage.getItem(`veyra_onboarded_${user.id}`) === 'true';
+  } catch {
+    return false;
+  }
+}
 
-  const [isOpen, setIsOpen] = useState(() => {
-    if (!user) return false;
-    try {
-      const onboarded = localStorage.getItem(`veyra_onboarded_${user.id}`);
-      return onboarded !== 'true';
-    } catch {
-      return false;
+export function OnboardingModal() {
+  const { user, watchlist, refreshAuth, refreshUserData, notify } = useVeyra();
+
+  const [isOpen, setIsOpen] = useState(() => !isAlreadyOnboarded(user, watchlist.length));
+
+  useEffect(() => {
+    if (!user) {
+      setIsOpen(false);
+      return;
     }
-  });
+    if (isAlreadyOnboarded(user, watchlist.length)) {
+      try {
+        localStorage.setItem(`veyra_onboarded_${user.id}`, 'true');
+      } catch {}
+      setIsOpen(false);
+    }
+  }, [user, watchlist.length]);
 
   const [fullName, setFullName] = useState(user?.full_name || '');
   const [selectedAvatar, setSelectedAvatar] = useState<string>(user?.avatar_url || PRESET_AVATARS[0].url);

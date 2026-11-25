@@ -197,9 +197,20 @@ export function VeyraProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined') return;
     try {
       const savedTheme = window.localStorage.getItem('veyra_theme');
+      const onboardedEntries: Array<[string, string]> = [];
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith('veyra_onboarded_')) {
+          const val = window.localStorage.getItem(k);
+          if (val) onboardedEntries.push([k, val]);
+        }
+      }
       window.localStorage.clear();
       if (savedTheme === 'light' || savedTheme === 'dark') {
         window.localStorage.setItem('veyra_theme', savedTheme);
+      }
+      for (const [k, val] of onboardedEntries) {
+        window.localStorage.setItem(k, val);
       }
       window.sessionStorage.clear();
     } catch {
